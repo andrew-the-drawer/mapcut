@@ -1,3 +1,5 @@
+import './GlobeIllustration.css'
+
 export default function GlobeIllustration() {
   return (
     <svg viewBox="0 0 400 400" className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
