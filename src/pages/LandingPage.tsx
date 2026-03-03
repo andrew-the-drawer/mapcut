@@ -1,137 +1,12 @@
 import { Link } from 'react-router'
-
-// ── Inline SVG icons ──────────────────────────────────────────────────────────
-
-const GlobeIcon = ({ className = 'w-6 h-6' }: { className?: string }) => (
-  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418" />
-  </svg>
-)
-
-const CameraIcon = ({ className = 'w-5 h-5' }: { className?: string }) => (
-  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.774 48.774 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z" />
-    <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0zM18.75 10.5h.008v.008h-.008V10.5z" />
-  </svg>
-)
-
-const FilmIcon = ({ className = 'w-5 h-5' }: { className?: string }) => (
-  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h1.5C5.496 19.5 6 18.996 6 18.375m-3.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-1.5A1.125 1.125 0 0118 18.375M20.625 4.5H3.375m17.25 0c.621 0 1.125.504 1.125 1.125M20.625 4.5h-1.5C18.504 4.5 18 5.004 18 5.625m3.75 0v1.5c0 .621-.504 1.125-1.125 1.125M3.375 4.5c-.621 0-1.125.504-1.125 1.125M3.375 4.5h1.5C5.496 4.5 6 5.004 6 5.625m-3.75 0v1.5c0 .621.504 1.125 1.125 1.125m0 0h1.5m-1.5 0c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m1.5-3.75C5.496 8.25 6 7.746 6 7.125v-1.5M4.875 8.25C5.496 8.25 6 8.754 6 9.375v1.5m0-5.25v5.25m0-5.25C6 5.004 6.504 4.5 7.125 4.5h9.75c.621 0 1.125.504 1.125 1.125m1.125 2.625h1.5m-1.5 0A1.125 1.125 0 0118 7.125v-1.5m1.125 2.625c-.621 0-1.125.504-1.125 1.125v1.5m2.625-2.625c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125M18 5.625v5.25M7.125 12h9.75m-9.75 0A1.125 1.125 0 016 10.875M7.125 12C6.504 12 6 12.504 6 13.125m0-2.25C6 11.496 5.496 12 4.875 12M18 10.875c0 .621-.504 1.125-1.125 1.125M18 10.875c0 .621.504 1.125 1.125 1.125m-2.25 0c.621 0 1.125.504 1.125 1.125m-12 5.25v-5.25m0 5.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125m-12 0v-1.5c0-.621-.504-1.125-1.125-1.125M17.625 18.375v-5.25m0 5.25v-1.5c0-.621.504-1.125 1.125-1.125M17.625 13.125h1.5m-1.5 0c-.621 0-1.125-.504-1.125-1.125v-1.5c0-.621.504-1.125 1.125-1.125" />
-  </svg>
-)
-
-const MapPinIcon = ({ className = 'w-5 h-5' }: { className?: string }) => (
-  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
-    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
-  </svg>
-)
-
-const ShareIcon = ({ className = 'w-5 h-5' }: { className?: string }) => (
-  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M7.217 10.907a2.25 2.25 0 100 2.186m0-2.186c.18.324.283.696.283 1.093s-.103.77-.283 1.093m0-2.186l9.566-5.314m-9.566 7.5l9.566 5.314m0 0a2.25 2.25 0 103.935 2.186 2.25 2.25 0 00-3.935-2.186zm0-12.814a2.25 2.25 0 103.933-2.185 2.25 2.25 0 00-3.933 2.185z" />
-  </svg>
-)
-
-const ArrowRightIcon = ({ className = 'w-4 h-4' }: { className?: string }) => (
-  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
-  </svg>
-)
-
-const CheckIcon = () => (
-  <svg className="w-4 h-4 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-  </svg>
-)
-
-// ── Globe illustration ─────────────────────────────────────────────────────────
-
-const GlobeIllustration = () => (
-  <svg viewBox="0 0 400 400" className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
-    <defs>
-      <radialGradient id="globeOuterGlow" cx="50%" cy="50%" r="50%">
-        <stop offset="0%" stopColor="#4f46e5" stopOpacity="0.25" />
-        <stop offset="100%" stopColor="#4f46e5" stopOpacity="0" />
-      </radialGradient>
-      <radialGradient id="sphereGradient" cx="36%" cy="32%" r="68%">
-        <stop offset="0%" stopColor="#1e1b4b" />
-        <stop offset="55%" stopColor="#0d0b2e" />
-        <stop offset="100%" stopColor="#070714" />
-      </radialGradient>
-      <clipPath id="sphereClip">
-        <circle cx="200" cy="200" r="150" />
-      </clipPath>
-      <filter id="waypointGlow" x="-50%" y="-50%" width="200%" height="200%">
-        <feGaussianBlur stdDeviation="3" result="blur" />
-        <feMerge>
-          <feMergeNode in="blur" />
-          <feMergeNode in="SourceGraphic" />
-        </feMerge>
-      </filter>
-    </defs>
-
-    {/* Outer ambient glow */}
-    <circle cx="200" cy="200" r="190" fill="url(#globeOuterGlow)" />
-
-    {/* Sphere body */}
-    <circle cx="200" cy="200" r="150" fill="url(#sphereGradient)" />
-
-    {/* Grid lines — clipped to sphere */}
-    <g clipPath="url(#sphereClip)" opacity="0.18" stroke="#818cf8" strokeWidth="0.7" fill="none">
-      {/* Latitude lines */}
-      <ellipse cx="200" cy="200" rx="150" ry="52" />
-      <ellipse cx="200" cy="150" rx="141" ry="49" />
-      <ellipse cx="200" cy="100" rx="112" ry="39" />
-      <ellipse cx="200" cy="250" rx="141" ry="49" />
-      <ellipse cx="200" cy="300" rx="112" ry="39" />
-      {/* Longitude lines */}
-      <ellipse cx="200" cy="200" rx="2"   ry="150" />
-      <ellipse cx="200" cy="200" rx="75"  ry="150" />
-      <ellipse cx="200" cy="200" rx="130" ry="150" />
-      <ellipse cx="200" cy="200" rx="75"  ry="150" transform="rotate(90 200 200)" />
-    </g>
-
-    {/* Sphere border */}
-    <circle cx="200" cy="200" r="150" fill="none" stroke="#3730a3" strokeWidth="1.5" />
-
-    {/* Specular highlight */}
-    <ellipse cx="153" cy="152" rx="52" ry="34" fill="white" fillOpacity="0.05" transform="rotate(-28 153 152)" />
-
-    {/* ── Flight paths ── */}
-    <path d="M 118 158 Q 157 108 196 138" stroke="#818cf8" strokeWidth="1.5" fill="none" strokeDasharray="5 3" opacity="0.75" />
-    <path d="M 196 138 Q 246 118 292 152" stroke="#818cf8" strokeWidth="1.5" fill="none" strokeDasharray="5 3" opacity="0.75" />
-    <path d="M 292 152 Q 295 210 268 268" stroke="#818cf8" strokeWidth="1.5" fill="none" strokeDasharray="5 3" opacity="0.75" />
-
-    {/* ── Waypoints ── */}
-    {/* New York */}
-    <circle cx="118" cy="158" r="12" fill="#6366f1" fillOpacity="0.2" className="waypoint-pulse" />
-    <circle cx="118" cy="158" r="5.5" fill="#6366f1" filter="url(#waypointGlow)" />
-
-    {/* Paris */}
-    <circle cx="196" cy="138" r="12" fill="#6366f1" fillOpacity="0.2" className="waypoint-pulse" style={{ animationDelay: '0.5s' }} />
-    <circle cx="196" cy="138" r="5.5" fill="#818cf8" filter="url(#waypointGlow)" />
-
-    {/* Tokyo */}
-    <circle cx="292" cy="152" r="12" fill="#6366f1" fillOpacity="0.2" className="waypoint-pulse" style={{ animationDelay: '1s' }} />
-    <circle cx="292" cy="152" r="5.5" fill="#6366f1" filter="url(#waypointGlow)" />
-
-    {/* Sydney */}
-    <circle cx="268" cy="268" r="12" fill="#6366f1" fillOpacity="0.2" className="waypoint-pulse" style={{ animationDelay: '1.5s' }} />
-    <circle cx="268" cy="268" r="5.5" fill="#818cf8" filter="url(#waypointGlow)" />
-
-    {/* Animated travel dot */}
-    <circle r="3.5" fill="white" opacity="0.9" filter="url(#waypointGlow)">
-      <animateMotion dur="6s" repeatCount="indefinite" keyTimes="0;0.33;0.66;1" calcMode="spline" keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1">
-        <mpath href="#travelPath" />
-      </animateMotion>
-    </circle>
-
-    {/* Hidden path for the animated dot */}
-    <path id="travelPath" d="M 118 158 Q 157 108 196 138 Q 246 118 292 152 Q 295 210 268 268" fill="none" />
-  </svg>
-)
+import GlobeIcon from '../components/icons/GlobeIcon'
+import CameraIcon from '../components/icons/CameraIcon'
+import FilmIcon from '../components/icons/FilmIcon'
+import ShareIcon from '../components/icons/ShareIcon'
+import ArrowRightIcon from '../components/icons/ArrowRightIcon'
+import CheckIcon from '../components/icons/CheckIcon'
+import HeartIcon from '../components/icons/HeartIcon'
+import GlobeIllustration from '../components/GlobeIllustration'
 
 // ── Data ───────────────────────────────────────────────────────────────────────
 
@@ -160,17 +35,14 @@ const features = [
 
 const steps = [
   {
-    icon: <MapPinIcon className="w-5 h-5" />,
     title: 'Plot your journey',
     description: 'Click anywhere on the 3D globe to drop waypoints. Drag to reorder, name each stop, and define your route.',
   },
   {
-    icon: <CameraIcon />,
     title: 'Attach your memories',
     description: 'For each waypoint, upload photos and videos, write rich notes, and set the camera angle and display timing.',
   },
   {
-    icon: <FilmIcon />,
     title: 'Export your film',
     description: 'Hit export and MapCut flies through your route — compositing your media at each stop into a shareable MP4.',
   },
@@ -360,9 +232,7 @@ export default function LandingPage() {
           </div>
           <div className="flex items-center gap-1">
             Built with
-            <svg className="w-4 h-4 text-red-500 mx-1" fill="currentColor" viewBox="0 0 20 20" aria-label="love">
-              <path fillRule="evenodd" d="M3.172 5.172a4 4 0 015.656 0L10 6.343l1.172-1.171a4 4 0 115.656 5.656L10 17.657l-6.828-6.829a4 4 0 010-5.656z" clipRule="evenodd" />
-            </svg>
+            <HeartIcon className="w-4 h-4 text-red-500 mx-1" />
             for every traveler
           </div>
         </div>
