@@ -2,15 +2,16 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import KeyIcon from '../components/icons/KeyIcon'
-import MapOnboarding, { LS_KEY } from '../components/MapOnboarding'
+import MapOnboarding from '../components/MapOnboarding'
+import { ELocalStorageKey } from '../utils/constants'
 
 // ── EditorPage ─────────────────────────────────────────────────────────────
 
 export default function EditorPage() {
   const mapContainerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
-  const [apiKey, setApiKey] = useState<string | null>(() => localStorage.getItem(LS_KEY))
-  const [showOnboarding, setShowOnboarding] = useState<boolean>(() => !localStorage.getItem(LS_KEY))
+  const [apiKey, setApiKey] = useState<string | null>(() => localStorage.getItem(ELocalStorageKey.MapTilerKey))
+  const [showOnboarding, setShowOnboarding] = useState<boolean>(() => !localStorage.getItem(ELocalStorageKey.MapTilerKey))
 
   // Initialize (or re-initialize) map when apiKey changes
   useEffect(() => {
@@ -52,8 +53,8 @@ export default function EditorPage() {
     }
   }, [apiKey])
 
-  const handleKey = useCallback((key: string) => {
-    setApiKey(key)
+  const handleSave = useCallback((mapTilerKey: string) => {
+    setApiKey(mapTilerKey)
     setShowOnboarding(false)
   }, [])
 
@@ -83,7 +84,7 @@ export default function EditorPage() {
       {showOnboarding && (
         <div className="absolute inset-0 z-50">
           <MapOnboarding
-            onKey={handleKey}
+            onSave={handleSave}
             onCancel={apiKey ? handleCancel : undefined}
             isUpdate={!!apiKey}
           />

@@ -1,28 +1,32 @@
 import { useState } from 'react'
 import KeyIcon from './icons/KeyIcon'
 import ExternalLinkIcon from './icons/ExternalLinkIcon'
-
-export const LS_KEY = 'maptiler_key'
+import { ELocalStorageKey } from '../utils/constants'
 
 export interface MapOnboardingProps {
-  onKey: (key: string) => void
+  onSave: (mapTilerKey: string, orsKey: string) => void
   onCancel?: () => void
   isUpdate: boolean
 }
 
-export default function MapOnboarding({ onKey, onCancel, isUpdate }: MapOnboardingProps) {
-  const [value, setValue] = useState('')
+export default function MapOnboarding({ onSave, onCancel, isUpdate }: MapOnboardingProps) {
+  const [mapTilerValue, setMapTilerValue] = useState('')
+  const [orsValue, setOrsValue] = useState('')
   const [error, setError] = useState('')
 
   function handleSubmit(e: React.SyntheticEvent<HTMLFormElement>) {
     e.preventDefault()
-    const trimmed = value.trim()
-    if (!trimmed) {
-      setError('Please enter a valid API key.')
+    const trimmedMapTiler = mapTilerValue.trim()
+    if (!trimmedMapTiler) {
+      setError('Please enter a valid MapTiler API key.')
       return
     }
-    localStorage.setItem(LS_KEY, trimmed)
-    onKey(trimmed)
+    const trimmedOrs = orsValue.trim()
+    localStorage.setItem(ELocalStorageKey.MapTilerKey, trimmedMapTiler)
+    if (trimmedOrs) {
+      localStorage.setItem(ELocalStorageKey.OpenRouteServiceKey, trimmedOrs)
+    }
+    onSave(trimmedMapTiler, trimmedOrs)
   }
 
   return (
@@ -36,11 +40,10 @@ export default function MapOnboarding({ onKey, onCancel, isUpdate }: MapOnboardi
             <KeyIcon className="w-5 h-5 text-blue-400" />
           </div>
           <h2 className="text-lg font-semibold text-white">
-            {isUpdate ? 'Update MapTiler API Key' : 'Connect MapTiler Cloud'}
+            {isUpdate ? 'Update API Keys' : 'Connect Your API Keys'}
           </h2>
           <p className="text-sm text-gray-400 mt-1.5 leading-relaxed">
-            MapCut uses MapTiler for 3D satellite maps and terrain.
-            Your key is stored locally in your browser and never sent to any server.
+            Your keys are stored locally in your browser and never sent to any server.
           </p>
         </div>
 
@@ -65,26 +68,54 @@ export default function MapOnboarding({ onKey, onCancel, isUpdate }: MapOnboardi
             </li>
             <li className="flex gap-3">
               <span className="flex-shrink-0 w-5 h-5 rounded-full bg-white/5 border border-white/10 text-xs text-gray-400 flex items-center justify-center font-medium">2</span>
-              <span>Navigate to <strong className="text-white font-medium">Account → API keys</strong>.</span>
+              <span>Navigate to <strong className="text-white font-medium">Account → API keys</strong> and copy your default key.</span>
             </li>
             <li className="flex gap-3">
               <span className="flex-shrink-0 w-5 h-5 rounded-full bg-white/5 border border-white/10 text-xs text-gray-400 flex items-center justify-center font-medium">3</span>
-              <span>Copy your default key and paste it below.</span>
+              <span>
+                Optionally, get a free key from{' '}
+                <a
+                  href="https://openrouteservice.org/dev/#/login"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors duration-150 cursor-pointer"
+                >
+                  openrouteservice.org
+                  <ExternalLinkIcon className="w-3 h-3" />
+                </a>
+                {' '}for route generation.
+              </span>
             </li>
           </ol>
         )}
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-3">
-          <input
-            type="text"
-            value={value}
-            onChange={e => { setValue(e.target.value); setError('') }}
-            placeholder="Paste your MapTiler API key"
-            autoFocus
-            spellCheck={false}
-            className="w-full bg-[#1a1f2e] border border-white/10 rounded-lg px-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30 transition-colors duration-150 font-mono"
-          />
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-gray-400">MapTiler API Key <span className="text-red-400">*</span></label>
+            <input
+              type="text"
+              value={mapTilerValue}
+              onChange={e => { setMapTilerValue(e.target.value); setError('') }}
+              placeholder="Paste your MapTiler API key"
+              autoFocus
+              spellCheck={false}
+              className="w-full bg-[#1a1f2e] border border-white/10 rounded-lg px-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30 transition-colors duration-150 font-mono"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-gray-400">
+              OpenRouteService API Key <span className="text-gray-500">(optional)</span>
+            </label>
+            <input
+              type="text"
+              value={orsValue}
+              onChange={e => setOrsValue(e.target.value)}
+              placeholder="Paste your OpenRouteService API key"
+              spellCheck={false}
+              className="w-full bg-[#1a1f2e] border border-white/10 rounded-lg px-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30 transition-colors duration-150 font-mono"
+            />
+          </div>
           {error && (
             <p className="text-red-400 text-xs">{error}</p>
           )}
@@ -92,7 +123,7 @@ export default function MapOnboarding({ onKey, onCancel, isUpdate }: MapOnboardi
             type="submit"
             className="w-full bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white text-sm font-medium py-3 rounded-lg transition-colors duration-150 cursor-pointer"
           >
-            {isUpdate ? 'Update Key' : 'Connect & Open Editor'}
+            {isUpdate ? 'Update Keys' : 'Connect & Open Editor'}
           </button>
           {isUpdate && onCancel && (
             <button
