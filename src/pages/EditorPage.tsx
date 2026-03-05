@@ -13,6 +13,57 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+const TRANSPORT_ICONS: Record<TransportMode, string> = {
+  fly: '✈',
+  drive: '🚗',
+  train: '🚄',
+  walk: '🚶',
+}
+
+// Base angle of the emoji when unrotated (degrees clockwise from north).
+// ✈ points upper-right (~NE = 45°), others face right (~E = 90°).
+const TRANSPORT_BASE_ANGLE: Record<TransportMode, number> = {
+  fly: 45,
+  drive: 90,
+  train: 90,
+  walk: 90,
+}
+
+function makeTipMarkerEl(mode: TransportMode): HTMLDivElement {
+  const el = document.createElement('div')
+  const color = TRANSPORT_COLORS[mode]
+  el.style.cssText = `
+    width: 28px;
+    height: 28px;
+    background: ${color}22;
+    border: 2px solid ${color};
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    box-shadow: 0 0 10px ${color}88;
+    pointer-events: none;
+    user-select: none;
+  `
+  const icon = document.createElement('span')
+  icon.style.cssText = 'display:inline-block;transition:transform 0.1s linear;'
+  icon.textContent = TRANSPORT_ICONS[mode]
+  el.appendChild(icon)
+  return el
+}
+
+// Bearing in degrees clockwise from north between two [lng, lat] points.
+function calcBearing(from: [number, number], to: [number, number]): number {
+  const toRad = (d: number) => (d * Math.PI) / 180
+  const toDeg = (r: number) => (r * 180) / Math.PI
+  const lat1 = toRad(from[1]), lat2 = toRad(to[1])
+  const dLng = toRad(to[0] - from[0])
+  const y = Math.sin(dLng) * Math.cos(lat2)
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng)
+  return (toDeg(Math.atan2(y, x)) + 360) % 360
+}
+
 function makeWaypointMarkerEl(): HTMLDivElement {
   const el = document.createElement('div')
   el.style.cssText = `
@@ -43,6 +94,7 @@ export default function EditorPage() {
   // Animation state
   const animFrameRef = useRef<number | null>(null)
   const isPlayingRef = useRef(false)
+  const tipMarkerRef = useRef<maplibregl.Marker | null>(null)
 
   const [apiKey, setApiKey] = useState<string | null>(
     () => localStorage.getItem(ELocalStorageKey.MapTilerKey),
@@ -336,6 +388,18 @@ export default function EditorPage() {
           map.setPaintProperty(layerId, 'line-opacity', 0.85)
         }
 
+        // Create tip marker for this segment
+        tipMarkerRef.current?.remove()
+        tipMarkerRef.current = null
+        if (allCoords.length >= 2) {
+          tipMarkerRef.current = new maplibregl.Marker({
+            element: makeTipMarkerEl(wp.transportMode),
+            anchor: 'center',
+          })
+            .setLngLat(allCoords[0] as [number, number])
+            .addTo(map)
+        }
+
         const DURATION = 3500
         const start = performance.now()
 
@@ -346,6 +410,13 @@ export default function EditorPage() {
             const progress = Math.min((performance.now() - start) / DURATION, 1)
             const count = Math.max(2, Math.floor(progress * allCoords.length))
             setSourceCoords(sourceId, allCoords.slice(0, count))
+            const tip = allCoords[count - 1] as [number, number]
+            tipMarkerRef.current?.setLngLat(tip)
+            if (count >= 2) {
+              const b = calcBearing(allCoords[count - 2] as [number, number], tip)
+              const icon = tipMarkerRef.current?.getElement().firstElementChild as HTMLElement | null
+              if (icon) icon.style.transform = `rotate(${b - TRANSPORT_BASE_ANGLE[wp.transportMode]}deg)`
+            }
             if (progress < 1) {
               animFrameRef.current = requestAnimationFrame(animate)
             }
@@ -359,6 +430,10 @@ export default function EditorPage() {
           cancelAnimationFrame(animFrameRef.current)
           animFrameRef.current = null
         }
+
+        // Remove tip marker once segment is done
+        tipMarkerRef.current?.remove()
+        tipMarkerRef.current = null
 
         // Ensure fully revealed
         if (allCoords.length >= 2) setSourceCoords(sourceId, allCoords)
@@ -380,6 +455,8 @@ export default function EditorPage() {
       cancelAnimationFrame(animFrameRef.current)
       animFrameRef.current = null
     }
+    tipMarkerRef.current?.remove()
+    tipMarkerRef.current = null
     restoreAllRoutes()
     setIsAnimating(false)
   }, [restoreAllRoutes])
