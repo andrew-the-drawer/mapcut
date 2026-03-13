@@ -8,8 +8,6 @@ export interface WaypointEntry {
   name: string
   coordinates: [number, number] // [lng, lat]
   transportMode: TransportMode  // transport mode FROM the previous waypoint to this one
-  routeCoords: [number, number][] | null
-  routeLoading: boolean
 }
 
 interface GeocoderFeature {
@@ -22,6 +20,8 @@ interface Props {
   waypoints: WaypointEntry[]
   apiKey: string
   isAnimating: boolean
+  /** Set of waypoint ids (destination) whose incoming route is currently loading */
+  routeLoadingIds: Set<string>
   onAdd: (name: string, coordinates: [number, number]) => void
   onDelete: (id: string) => void
   onTransportModeChange: (id: string, mode: TransportMode) => void
@@ -44,6 +44,7 @@ export default function WaypointPanel({
   waypoints,
   apiKey,
   isAnimating,
+  routeLoadingIds,
   onAdd,
   onDelete,
   onTransportModeChange,
@@ -191,7 +192,7 @@ export default function WaypointPanel({
                     </button>
                   ))}
                 </div>
-                {wp.routeLoading && (
+                {routeLoadingIds.has(wp.id) && (
                   <div className="ml-auto mr-1 w-3 h-3 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
                 )}
               </div>

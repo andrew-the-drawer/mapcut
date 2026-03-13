@@ -61,10 +61,11 @@ async function fetchOSRMRoute(
   from: [number, number],
   to: [number, number],
   profile: 'driving' | 'foot',
+  signal?: AbortSignal,
 ): Promise<[number, number][] | null> {
   try {
     const url = `https://router.project-osrm.org/route/v1/${profile}/${from[0]},${from[1]};${to[0]},${to[1]}?overview=full&geometries=geojson`
-    const res = await fetch(url)
+    const res = await fetch(url, { signal })
     if (!res.ok) return null
     const data = await res.json()
     if (data.code !== 'Ok' || !data.routes?.[0]) return null
@@ -80,11 +81,12 @@ export async function fetchRoute(
   from: [number, number],
   to: [number, number],
   mode: TransportMode,
+  signal?: AbortSignal,
 ): Promise<[number, number][]> {
   if (mode === 'fly') return geodesicPath(from, to)
 
   const profile = mode === 'walk' ? 'foot' : 'driving'
-  const coords = await fetchOSRMRoute(from, to, profile)
+  const coords = await fetchOSRMRoute(from, to, profile, signal)
   if (coords) return coords
 
   console.warn(`No ${mode} route found, falling back to geodesic interpolation`)

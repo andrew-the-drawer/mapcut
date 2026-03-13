@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import KeyIcon from '../components/icons/KeyIcon'
 import MapOnboarding from '../components/MapOnboarding'
 import WaypointPanel, { type WaypointEntry } from '../components/WaypointPanel'
 import { ELocalStorageKey } from '../utils/constants'
-import { fetchRoute, TRANSPORT_COLORS, type TransportMode } from '../lib/map/pathUtils'
+import { TRANSPORT_COLORS, type TransportMode } from '../lib/map/pathUtils'
+import { useRouteCoords } from '../hooks/useRouteCoords'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -89,8 +90,6 @@ export default function EditorPage() {
   const markersRef = useRef<Map<string, maplibregl.Marker>>(new Map())
   // Set of active route layer IDs currently added to the map
   const activeLayerIdsRef = useRef<Set<string>>(new Set())
-  // Guard against double-fetching routes
-  const fetchingIdsRef = useRef<Set<string>>(new Set())
   // Animation state
   const animFrameRef = useRef<number | null>(null)
   const isPlayingRef = useRef(false)
@@ -104,6 +103,8 @@ export default function EditorPage() {
   )
   const [waypoints, setWaypoints] = useState<WaypointEntry[]>([])
   const [isAnimating, setIsAnimating] = useState(false)
+
+  const { routeData, onWaypointAdded, onWaypointDeleted, onTransportModeChanged } = useRouteCoords()
 
   // ── Map init ────────────────────────────────────────────────────────────────
 
@@ -201,7 +202,9 @@ export default function EditorPage() {
     // Add route layer for each segment that has computed coords
     for (let i = 1; i < waypoints.length; i++) {
       const wp = waypoints[i]
-      if (!wp.routeCoords) continue
+      const prevWp = waypoints[i - 1]
+      const pair = routeData[prevWp.id]?.[wp.id]
+      if (!pair || pair.loading || pair.rootCoords.length === 0) continue
 
       const sourceId = `route-${wp.id}`
       const layerId = `route-${wp.id}-layer`
@@ -211,7 +214,7 @@ export default function EditorPage() {
         type: 'geojson',
         data: {
           type: 'Feature',
-          geometry: { type: 'LineString', coordinates: wp.routeCoords },
+          geometry: { type: 'LineString', coordinates: pair.rootCoords },
           properties: {},
         },
       })
@@ -224,99 +227,43 @@ export default function EditorPage() {
           'line-color': color,
           'line-width': 3,
           'line-opacity': 0.85,
-          
         },
         layout: { 'line-join': 'round', 'line-cap': 'round' },
       })
       activeLayerIdsRef.current.add(layerId)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapLoaded, waypoints.map(w => `${w.id}:${w.transportMode}:${w.routeCoords ? 'y' : 'n'}`).join('|')])
-
-  // ── Fetch routes for waypoints that need them ───────────────────────────────
-
-  useEffect(() => {
-    for (let i = 1; i < waypoints.length; i++) {
-      const wp = waypoints[i]
-      const prev = waypoints[i - 1]
-      if (!wp.routeLoading || fetchingIdsRef.current.has(wp.id)) continue
-
-      fetchingIdsRef.current.add(wp.id)
-
-      fetchRoute(prev.coordinates, wp.coordinates, wp.transportMode)
-        .then(coords => {
-          fetchingIdsRef.current.delete(wp.id)
-          setWaypoints(wps =>
-            wps.map(w =>
-              w.id === wp.id ? { ...w, routeCoords: coords, routeLoading: false } : w,
-            ),
-          )
-        })
-        .catch(() => {
-          fetchingIdsRef.current.delete(wp.id)
-          setWaypoints(wps =>
-            wps.map(w => (w.id === wp.id ? { ...w, routeLoading: false } : w)),
-          )
-        })
-    }
-  }, [waypoints])
+  }, [mapLoaded, waypoints, routeData])
 
   // ── Waypoint actions ────────────────────────────────────────────────────────
 
   const handleAddWaypoint = useCallback(
     (name: string, coordinates: [number, number]) => {
       const id = `wp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-
-      setWaypoints(prev => {
-        const isFirst = prev.length === 0
-        return [
-          ...prev,
-          {
-            id,
-            name,
-            coordinates,
-            transportMode: 'fly' as TransportMode,
-            routeCoords: null,
-            routeLoading: !isFirst,
-          },
-        ]
-      })
-
-      // Fly to the new waypoint
+      const newWp: WaypointEntry = { id, name, coordinates, transportMode: 'fly' }
+      const prevWp = waypoints.length > 0 ? waypoints[waypoints.length - 1] : null
+      onWaypointAdded(prevWp, newWp)
+      setWaypoints(prev => [...prev, newWp])
       mapRef.current?.flyTo({ center: coordinates, zoom: 6, duration: 2000, curve: 1.42 })
     },
-    [],
+    [waypoints, onWaypointAdded],
   )
 
   const handleDeleteWaypoint = useCallback((id: string) => {
-    fetchingIdsRef.current.delete(id)
-    setWaypoints(prev => {
-      const idx = prev.findIndex(w => w.id === id)
-      if (idx === -1) return prev
-      const next = [...prev]
-      next.splice(idx, 1)
-
-      // Waypoint that was AFTER the deleted one now needs a new route
-      if (idx > 0 && idx < next.length) {
-        fetchingIdsRef.current.delete(next[idx].id)
-        next[idx] = { ...next[idx], routeCoords: null, routeLoading: true }
-      } else if (idx === 0 && next.length > 0) {
-        // Deleted the first waypoint — the new first has no incoming route
-        next[0] = { ...next[0], routeCoords: null, routeLoading: false }
-      }
-
-      return next
-    })
-  }, [])
+    const idx = waypoints.findIndex(w => w.id === id)
+    if (idx === -1) return
+    const prevWp = idx > 0 ? waypoints[idx - 1] : null
+    const nextWp = idx < waypoints.length - 1 ? waypoints[idx + 1] : null
+    onWaypointDeleted(id, prevWp, nextWp)
+    setWaypoints(prev => prev.filter(w => w.id !== id))
+  }, [waypoints, onWaypointDeleted])
 
   const handleTransportModeChange = useCallback((id: string, mode: TransportMode) => {
-    fetchingIdsRef.current.delete(id)
-    setWaypoints(prev =>
-      prev.map(wp =>
-        wp.id === id ? { ...wp, transportMode: mode, routeCoords: null, routeLoading: true } : wp,
-      ),
-    )
-  }, [])
+    const idx = waypoints.findIndex(w => w.id === id)
+    if (idx === -1) return
+    const prevWp = idx > 0 ? waypoints[idx - 1] : null
+    if (prevWp) onTransportModeChanged(prevWp, waypoints[idx], mode)
+    setWaypoints(prev => prev.map(wp => wp.id === id ? { ...wp, transportMode: mode } : wp))
+  }, [waypoints, onTransportModeChanged])
 
   // ── Animation ───────────────────────────────────────────────────────────────
 
@@ -326,18 +273,19 @@ export default function EditorPage() {
     if (!map) return
     for (let i = 1; i < waypoints.length; i++) {
       const wp = waypoints[i]
-      if (!wp.routeCoords) continue
+      const coords = routeData[waypoints[i - 1].id]?.[wp.id]?.rootCoords
+      if (!coords || coords.length === 0) continue
       const source = map.getSource(`route-${wp.id}`) as maplibregl.GeoJSONSource | undefined
       source?.setData({
         type: 'Feature',
-        geometry: { type: 'LineString', coordinates: wp.routeCoords },
+        geometry: { type: 'LineString', coordinates: coords },
         properties: {},
       })
       if (map.getLayer(`route-${wp.id}-layer`)) {
         map.setPaintProperty(`route-${wp.id}-layer`, 'line-opacity', 0.85)
       }
     }
-  }, [waypoints])
+  }, [waypoints, routeData])
 
   const playAnimation = useCallback(async () => {
     const map = mapRef.current
@@ -380,7 +328,7 @@ export default function EditorPage() {
         const wp = waypoints[i]
         const sourceId = `route-${wp.id}`
         const layerId = `route-${wp.id}-layer`
-        const allCoords = wp.routeCoords ?? []
+        const allCoords = routeData[waypoints[i - 1].id]?.[wp.id]?.rootCoords ?? []
 
         if (allCoords.length >= 2 && map.getLayer(layerId)) {
           // Reset source to just the first point stub, then make layer visible
@@ -447,7 +395,7 @@ export default function EditorPage() {
       isPlayingRef.current = false
       setIsAnimating(false)
     }
-  }, [waypoints, isAnimating, restoreAllRoutes])
+  }, [waypoints, routeData, isAnimating, restoreAllRoutes])
 
   const stopAnimation = useCallback(() => {
     isPlayingRef.current = false
@@ -460,6 +408,18 @@ export default function EditorPage() {
     restoreAllRoutes()
     setIsAnimating(false)
   }, [restoreAllRoutes])
+
+  // ── Derived state ───────────────────────────────────────────────────────────
+
+  const routeLoadingIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const fromMap of Object.values(routeData)) {
+      for (const [toId, pair] of Object.entries(fromMap)) {
+        if (pair.loading) ids.add(toId)
+      }
+    }
+    return ids
+  }, [routeData])
 
   // ── Onboarding handlers ─────────────────────────────────────────────────────
 
@@ -483,6 +443,7 @@ export default function EditorPage() {
           waypoints={waypoints}
           apiKey={apiKey}
           isAnimating={isAnimating}
+          routeLoadingIds={routeLoadingIds}
           onAdd={handleAddWaypoint}
           onDelete={handleDeleteWaypoint}
           onTransportModeChange={handleTransportModeChange}
