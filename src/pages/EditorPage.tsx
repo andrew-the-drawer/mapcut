@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
+import { MapboxOverlay } from '@deck.gl/mapbox'
+import { PathLayer } from '@deck.gl/layers'
 import KeyIcon from '../components/icons/KeyIcon'
 import MapOnboarding from '../components/MapOnboarding'
 import WaypointPanel, { type WaypointEntry } from '../components/WaypointPanel'
@@ -12,6 +14,14 @@ import { useRouteCoords } from '../hooks/useRouteCoords'
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function hexToRgb(hex: string): [number, number, number] {
+  return [
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  ]
 }
 
 const TRANSPORT_ICONS: Record<TransportMode, string> = {
@@ -65,6 +75,55 @@ function calcBearing(from: [number, number], to: [number, number]): number {
   return (toDeg(Math.atan2(y, x)) + 360) % 360
 }
 
+// ── MapLibre route line helpers ───────────────────────────────────────────────
+
+function mlIds(id: string) {
+  return { sourceId: `ml-route-${id}`, layerId: `ml-route-${id}` }
+}
+
+function addMaplibreRoute(
+  map: maplibregl.Map,
+  id: string,
+  coords: number[][],
+  color: string,
+  opacity = 0.9,
+) {
+  const { sourceId, layerId } = mlIds(id)
+  if (map.getLayer(layerId)) map.removeLayer(layerId)
+  if (map.getSource(sourceId)) map.removeSource(sourceId)
+  map.addSource(sourceId, {
+    type: 'geojson',
+    data: { type: 'Feature', geometry: { type: 'LineString', coordinates: coords }, properties: {} },
+  })
+  map.addLayer({
+    id: layerId,
+    type: 'line',
+    source: sourceId,
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': color, 'line-width': 3, 'line-opacity': opacity },
+  })
+}
+
+function updateMaplibreRoute(map: maplibregl.Map, id: string, coords: number[][]) {
+  const { sourceId } = mlIds(id)
+  ;(map.getSource(sourceId) as maplibregl.GeoJSONSource | undefined)?.setData({
+    type: 'Feature',
+    geometry: { type: 'LineString', coordinates: coords },
+    properties: {},
+  })
+}
+
+function setMaplibreRouteOpacity(map: maplibregl.Map, id: string, opacity: number) {
+  const { layerId } = mlIds(id)
+  if (map.getLayer(layerId)) map.setPaintProperty(layerId, 'line-opacity', opacity)
+}
+
+function removeMaplibreRoute(map: maplibregl.Map, id: string) {
+  const { sourceId, layerId } = mlIds(id)
+  if (map.getLayer(layerId)) map.removeLayer(layerId)
+  if (map.getSource(sourceId)) map.removeSource(sourceId)
+}
+
 function makeWaypointMarkerEl(): HTMLDivElement {
   const el = document.createElement('div')
   el.style.cssText = `
@@ -84,16 +143,17 @@ function makeWaypointMarkerEl(): HTMLDivElement {
 export default function EditorPage() {
   const mapContainerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
+  const overlayRef = useRef<MapboxOverlay | null>(null)
   const [mapLoaded, setMapLoaded] = useState(false)
 
   // Waypoint markers keyed by waypoint id
   const markersRef = useRef<Map<string, maplibregl.Marker>>(new Map())
-  // Set of active route layer IDs currently added to the map
-  const activeLayerIdsRef = useRef<Set<string>>(new Set())
   // Animation state
   const animFrameRef = useRef<number | null>(null)
   const isPlayingRef = useRef(false)
   const tipMarkerRef = useRef<maplibregl.Marker | null>(null)
+  // Tracks which waypoint IDs have active MapLibre route source/layers (non-fly modes)
+  const mapRouteLinesRef = useRef<Set<string>>(new Set())
 
   const [apiKey, setApiKey] = useState<string | null>(
     () => localStorage.getItem(ELocalStorageKey.MapTilerKey),
@@ -111,9 +171,8 @@ export default function EditorPage() {
   useEffect(() => {
     if (!apiKey || !mapContainerRef.current) return
 
-    // Capture ref values at effect-run time for use in cleanup
     const markers = markersRef.current
-    const layers = activeLayerIdsRef.current
+    const mapRouteLines = mapRouteLinesRef.current
 
     if (mapRef.current) {
       mapRef.current.remove()
@@ -122,7 +181,7 @@ export default function EditorPage() {
 
     setMapLoaded(false)
     markers.clear()
-    layers.clear()
+    overlayRef.current = null
 
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
@@ -143,14 +202,20 @@ export default function EditorPage() {
         tileSize: 256,
       })
       map.setTerrain({ source: 'maptiler-dem', exaggeration: 1.5 })
+
+      const overlay = new MapboxOverlay({ layers: [] })
+      map.addControl(overlay)
+      overlayRef.current = overlay
+
       setMapLoaded(true)
     })
 
     return () => {
       map.remove()
       mapRef.current = null
+      overlayRef.current = null
       markers.clear()
-      layers.clear()
+      mapRouteLines.clear()
       setMapLoaded(false)
     }
   }, [apiKey])
@@ -188,53 +253,63 @@ export default function EditorPage() {
   // ── Sync route lines ────────────────────────────────────────────────────────
 
   useEffect(() => {
+    const overlay = overlayRef.current
     const map = mapRef.current
-    if (!map || !mapLoaded) return
+    if (!overlay || !map || !mapLoaded) return
 
-    // Remove all existing route layers and sources
-    for (const layerId of activeLayerIdsRef.current) {
-      if (map.getLayer(layerId)) map.removeLayer(layerId)
-      const sourceId = layerId.replace('-layer', '')
-      if (map.getSource(sourceId)) map.removeSource(sourceId)
-    }
-    activeLayerIdsRef.current.clear()
+    const pathLayers: PathLayer[] = []
+    const activeNonFlyIds = new Set<string>()
 
-    // Add route layer for each segment that has computed coords
     for (let i = 1; i < waypoints.length; i++) {
       const wp = waypoints[i]
       const prevWp = waypoints[i - 1]
       const pair = routeData[prevWp.id]?.[wp.id]
-      if (!pair || pair.loading || pair.rootCoords.length === 0) continue
+      if (!pair || pair.loading || pair.rootCoords.length < 2) continue
 
-      const sourceId = `route-${wp.id}`
-      const layerId = `route-${wp.id}-layer`
       const color = TRANSPORT_COLORS[wp.transportMode]
 
-      map.addSource(sourceId, {
-        type: 'geojson',
-        lineMetrics: true,
-        data: {
-          type: 'Feature',
-          geometry: { type: 'LineString', coordinates: pair.rootCoords },
-          properties: {},
-        },
-      })
-
-      const isFlight = wp.transportMode === 'fly'
-      map.addLayer({
-        id: layerId,
-        type: 'line',
-        source: sourceId,
-        paint: {
-          'line-gradient': ['interpolate', ['linear'], ['line-progress'], 0, color, 1, color],
-          'line-width': isFlight ? 4 : 4,
-          'line-opacity': isFlight ? 0.7 : 0.9,
-        },
-
-        layout: { 'line-join': 'round', 'line-cap': 'round' },
-      })
-      activeLayerIdsRef.current.add(layerId)
+      if (wp.transportMode === 'fly') {
+        // If a MapLibre layer exists for this id (mode was changed), remove it
+        if (mapRouteLinesRef.current.has(wp.id)) {
+          removeMaplibreRoute(map, wp.id)
+          mapRouteLinesRef.current.delete(wp.id)
+        }
+        pathLayers.push(
+          new PathLayer({
+            id: `route-${wp.id}`,
+            data: [{ path: pair.rootCoords }],
+            getPath: (d) => d.path,
+            getColor: hexToRgb(color),
+            getWidth: 3,
+            widthUnits: 'pixels',
+            widthMinPixels: 2,
+            capRounded: true,
+            jointRounded: true,
+            billboard: false,
+            opacity: 0.7,
+          }),
+        )
+      } else {
+        activeNonFlyIds.add(wp.id)
+        if (map.getLayer(`ml-route-${wp.id}`)) {
+          updateMaplibreRoute(map, wp.id, pair.rootCoords)
+          setMaplibreRouteOpacity(map, wp.id, 0.9)
+        } else {
+          addMaplibreRoute(map, wp.id, pair.rootCoords, color)
+          mapRouteLinesRef.current.add(wp.id)
+        }
+      }
     }
+
+    // Remove MapLibre routes for deleted waypoints or mode-changed-to-fly segments
+    for (const id of [...mapRouteLinesRef.current]) {
+      if (!activeNonFlyIds.has(id)) {
+        removeMaplibreRoute(map, id)
+        mapRouteLinesRef.current.delete(id)
+      }
+    }
+
+    overlay.setProps({ layers: pathLayers })
   }, [mapLoaded, waypoints, routeData])
 
   // ── Waypoint actions ────────────────────────────────────────────────────────
@@ -270,23 +345,56 @@ export default function EditorPage() {
 
   // ── Animation ───────────────────────────────────────────────────────────────
 
-  // Restore all route lines to their fully-visible solid-colour state
+  // Restore all route lines to their fully-visible state
   const restoreAllRoutes = useCallback(() => {
+    const overlay = overlayRef.current
     const map = mapRef.current
-    if (!map) return
+    if (!overlay || !map) return
+
+    const pathLayers: PathLayer[] = []
+
     for (let i = 1; i < waypoints.length; i++) {
       const wp = waypoints[i]
-      const layerId = `route-${wp.id}-layer`
-      if (!map.getLayer(layerId)) continue
+      const prevWp = waypoints[i - 1]
+      const pair = routeData[prevWp.id]?.[wp.id]
+      if (!pair || pair.rootCoords.length < 2) continue
+
       const color = TRANSPORT_COLORS[wp.transportMode]
-      map.setPaintProperty(layerId, 'line-gradient', ['interpolate', ['linear'], ['line-progress'], 0, color, 1, color])
-      map.setPaintProperty(layerId, 'line-opacity', 0.85)
+
+      if (wp.transportMode === 'fly') {
+        pathLayers.push(
+          new PathLayer({
+            id: `route-${wp.id}`,
+            data: [{ path: pair.rootCoords }],
+            getPath: (d) => d.path,
+            getColor: hexToRgb(color),
+            getWidth: 3,
+            widthUnits: 'pixels',
+            widthMinPixels: 2,
+            capRounded: true,
+            jointRounded: true,
+            billboard: false,
+            opacity: 0.7,
+          }),
+        )
+      } else {
+        if (map.getLayer(`ml-route-${wp.id}`)) {
+          updateMaplibreRoute(map, wp.id, pair.rootCoords)
+          setMaplibreRouteOpacity(map, wp.id, 0.9)
+        } else {
+          addMaplibreRoute(map, wp.id, pair.rootCoords, color)
+          mapRouteLinesRef.current.add(wp.id)
+        }
+      }
     }
-  }, [waypoints])
+
+    overlay.setProps({ layers: pathLayers })
+  }, [waypoints, routeData])
 
   const playAnimation = useCallback(async () => {
     const map = mapRef.current
-    if (!map || waypoints.length < 2 || isAnimating) return
+    const overlay = overlayRef.current
+    if (!map || !overlay || waypoints.length < 2 || isAnimating) return
 
     setIsAnimating(true)
     isPlayingRef.current = true
@@ -298,31 +406,23 @@ export default function EditorPage() {
       })
 
     try {
-      // Hide all route lines (set opacity to 0)
-      for (const layerId of activeLayerIdsRef.current) {
-        if (map.getLayer(layerId)) {
-          map.setPaintProperty(layerId, 'line-opacity', 0)
-        }
-      }
+      // Hide all routes
+      overlay.setProps({ layers: [] })
 
       // Fly to the first waypoint
       await flyAndWait(waypoints[0].coordinates, 2000)
       if (!isPlayingRef.current) return
+
+      // Accumulates fully-revealed layers for completed segments
+      const completedLayers: PathLayer[] = []
 
       // Animate each segment
       for (let i = 1; i < waypoints.length; i++) {
         if (!isPlayingRef.current) break
 
         const wp = waypoints[i]
-        const layerId = `route-${wp.id}-layer`
         const allCoords = routeData[waypoints[i - 1].id]?.[wp.id]?.rootCoords ?? []
-        const color = TRANSPORT_COLORS[wp.transportMode]
-
-        if (allCoords.length >= 2 && map.getLayer(layerId)) {
-          // Set gradient to fully transparent, then reveal layer
-          map.setPaintProperty(layerId, 'line-gradient', ['interpolate', ['linear'], ['line-progress'], 0, 'rgba(0,0,0,0)', 1, 'rgba(0,0,0,0)'])
-          map.setPaintProperty(layerId, 'line-opacity', 0.85)
-        }
+        const rgb = hexToRgb(TRANSPORT_COLORS[wp.transportMode])
 
         // Create tip marker for this segment
         tipMarkerRef.current?.remove()
@@ -340,16 +440,27 @@ export default function EditorPage() {
         const start = performance.now()
 
         if (allCoords.length >= 2) {
-          // Reveal the line by updating the gradient threshold — GPU-only, no geometry re-upload
+          // Slice coord array per frame — deck.gl diffs and re-uploads only changed geometry
           const animate = () => {
             if (!isPlayingRef.current) return
             const progress = Math.min((performance.now() - start) / DURATION, 1)
-            map.setPaintProperty(layerId, 'line-gradient', [
-              'step', ['line-progress'],
-              color,            // visible from 0 to progress
-              progress,
-              'rgba(0,0,0,0)', // transparent from progress to 1
-            ])
+            const sliceEnd = Math.max(2, Math.ceil(progress * allCoords.length))
+            const revealedCoords = allCoords.slice(0, sliceEnd)
+
+            const currentLayer = new PathLayer({
+              id: `route-${wp.id}-anim`,
+              data: [{ path: revealedCoords }],
+              getPath: (d) => d.path,
+              getColor: rgb,
+              getWidth: 4,
+              widthUnits: 'pixels',
+              widthMinPixels: 2,
+              capRounded: true,
+              jointRounded: true,
+              billboard: false,
+            })
+            overlay.setProps({ layers: [...completedLayers, currentLayer] })
+
             const tipIdx = Math.min(Math.floor(progress * (allCoords.length - 1)), allCoords.length - 1)
             const tip = allCoords[tipIdx] as [number, number]
             tipMarkerRef.current?.setLngLat(tip)
@@ -358,6 +469,7 @@ export default function EditorPage() {
               const icon = tipMarkerRef.current?.getElement().firstElementChild as HTMLElement | null
               if (icon) icon.style.transform = `rotate(${b - TRANSPORT_BASE_ANGLE[wp.transportMode]}deg)`
             }
+
             if (progress < 1) {
               animFrameRef.current = requestAnimationFrame(animate)
             }
@@ -372,13 +484,26 @@ export default function EditorPage() {
           animFrameRef.current = null
         }
 
-        // Remove tip marker once segment is done
         tipMarkerRef.current?.remove()
         tipMarkerRef.current = null
 
-        // Ensure fully revealed
-        if (allCoords.length >= 2 && map.getLayer(layerId)) {
-          map.setPaintProperty(layerId, 'line-gradient', ['interpolate', ['linear'], ['line-progress'], 0, color, 1, color])
+        // Push fully-revealed segment into the completed set
+        if (allCoords.length >= 2) {
+          completedLayers.push(
+            new PathLayer({
+              id: `route-${wp.id}`,
+              data: [{ path: allCoords }],
+              getPath: (d) => d.path,
+              getColor: rgb,
+              getWidth: 4,
+              widthUnits: 'pixels',
+              widthMinPixels: 2,
+              capRounded: true,
+              jointRounded: true,
+              billboard: false,
+            }),
+          )
+          overlay.setProps({ layers: completedLayers })
         }
 
         if (i < waypoints.length - 1 && isPlayingRef.current) {

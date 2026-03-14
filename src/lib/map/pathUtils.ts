@@ -106,13 +106,17 @@ export async function fetchRoute(
   signal?: AbortSignal,
 ): Promise<number[][]> {
   if (mode === 'fly') {
-    const toRad = (deg: number) => (deg * Math.PI) / 180
-    const dRad = 2 * Math.asin(Math.sqrt(
-      Math.sin((toRad(to[1]) - toRad(from[1])) / 2) ** 2 +
-      Math.cos(toRad(from[1])) * Math.cos(toRad(to[1])) *
-      Math.sin((toRad(to[0]) - toRad(from[0])) / 2) ** 2,
-    ))
-    const cruiseAlt = Math.min(40000, Math.max(10000, dRad * 6371 * 5))
+    // Scale cruise altitude with great-circle distance so short hops arc gently
+    // and intercontinental flights arc high — capped at 1,800 km.
+    const toRad = (d: number) => (d * Math.PI) / 180
+    const lat1 = toRad(from[1]), lat2 = toRad(to[1])
+    const dLng = toRad(to[0] - from[0])
+    const sinHalfD = Math.sqrt(
+      Math.sin((lat2 - lat1) / 2) ** 2 +
+        Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2,
+    )
+    const distM = 6_371_000 * 2 * Math.asin(sinHalfD)
+    const cruiseAlt = Math.min(Math.max(distM * 0.12, 50_000), 1_800_000)
     return geodesicPath(from, to, 100, cruiseAlt)
   }
 
