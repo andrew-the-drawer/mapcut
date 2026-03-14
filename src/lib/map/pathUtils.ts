@@ -15,12 +15,14 @@ export const TRANSPORT_LABELS: Record<TransportMode, string> = {
 }
 
 // Great-circle (geodesic) interpolation between two [lng, lat] points.
-// Produces ~numPoints intermediate coordinates that correctly arc over the globe.
+// When cruiseAltMeters > 0, each point includes a Z altitude (meters above sea
+// level) following a sine arc — peak at the midpoint, 0 at both endpoints.
 export function geodesicPath(
   from: [number, number],
   to: [number, number],
   numPoints = 100,
-): [number, number][] {
+  cruiseAltMeters = 0,
+): number[][] {
   const toRad = (d: number) => (d * Math.PI) / 180
   const toDeg = (r: number) => (r * 180) / Math.PI
 
@@ -38,9 +40,9 @@ export function geodesicPath(
       ),
     )
 
-  if (d === 0) return [from, to]
+  if (d === 0) return cruiseAltMeters > 0 ? [[...from, 0], [...to, 0]] : [from, to]
 
-  const points: [number, number][] = []
+  const points: number[][] = []
   for (let i = 0; i <= numPoints; i++) {
     const f = i / numPoints
     const A = Math.sin((1 - f) * d) / Math.sin(d)
@@ -52,7 +54,11 @@ export function geodesicPath(
     const z = A * Math.sin(lat1) + B * Math.sin(lat2)
     const lat = toDeg(Math.atan2(z, Math.sqrt(x ** 2 + y ** 2)))
     const lng = toDeg(Math.atan2(y, x))
-    points.push([lng, lat])
+    if (cruiseAltMeters > 0) {
+      points.push([lng, lat, cruiseAltMeters * Math.sin(Math.PI * f)])
+    } else {
+      points.push([lng, lat])
+    }
   }
   return points
 }
@@ -75,20 +81,48 @@ async function fetchOSRMRoute(
   }
 }
 
+// Returns true if the route looks degenerate: fewer than 3 unique points,
+// or all coords are suspiciously close to the origin (OSRM snapping failure).
+function isDegenerate(
+  coords: [number, number][],
+  from: [number, number],
+): boolean {
+  if (coords.length < 3) return true
+  const unique = new Set(coords.map(([lng, lat]) => `${lng.toFixed(4)},${lat.toFixed(4)}`))
+  if (unique.size < 3) return true
+  // If >90% of points are within 0.01° of the start, the route didn't go anywhere
+  const nearStart = coords.filter(
+    ([lng, lat]) => Math.abs(lng - from[0]) < 0.01 && Math.abs(lat - from[1]) < 0.01,
+  )
+  return nearStart.length / coords.length > 0.9
+}
+
 // Fetch route coordinates for a given transport mode.
-// Falls back to geodesic great-circle path if routing API returns no result.
+// Falls back to geodesic great-circle path if routing API returns no result or a degenerate route.
 export async function fetchRoute(
   from: [number, number],
   to: [number, number],
   mode: TransportMode,
   signal?: AbortSignal,
-): Promise<[number, number][]> {
-  if (mode === 'fly') return geodesicPath(from, to)
+): Promise<number[][]> {
+  if (mode === 'fly') {
+    const toRad = (deg: number) => (deg * Math.PI) / 180
+    const dRad = 2 * Math.asin(Math.sqrt(
+      Math.sin((toRad(to[1]) - toRad(from[1])) / 2) ** 2 +
+      Math.cos(toRad(from[1])) * Math.cos(toRad(to[1])) *
+      Math.sin((toRad(to[0]) - toRad(from[0])) / 2) ** 2,
+    ))
+    const cruiseAlt = Math.min(40000, Math.max(10000, dRad * 6371 * 5))
+    return geodesicPath(from, to, 100, cruiseAlt)
+  }
 
   const profile = mode === 'walk' ? 'foot' : 'driving'
   const coords = await fetchOSRMRoute(from, to, profile, signal)
-  if (coords) return coords
 
-  console.warn(`No ${mode} route found, falling back to geodesic interpolation`)
+  if (coords && !isDegenerate(coords, from)) return coords
+
+  console.warn(
+    `${mode} route from OSRM was ${coords ? 'degenerate' : 'unavailable'}, falling back to geodesic interpolation`,
+  )
   return geodesicPath(from, to)
 }

@@ -5,7 +5,7 @@ import type { WaypointEntry } from '../components/WaypointPanel'
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type RoutePair = {
-  rootCoords: [number, number][]
+  rootCoords: number[][]
   loading: boolean
 }
 

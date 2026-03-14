@@ -212,6 +212,7 @@ export default function EditorPage() {
 
       map.addSource(sourceId, {
         type: 'geojson',
+        lineMetrics: true,
         data: {
           type: 'Feature',
           geometry: { type: 'LineString', coordinates: pair.rootCoords },
@@ -219,15 +220,17 @@ export default function EditorPage() {
         },
       })
 
+      const isFlight = wp.transportMode === 'fly'
       map.addLayer({
         id: layerId,
         type: 'line',
         source: sourceId,
         paint: {
-          'line-color': color,
-          'line-width': 3,
-          'line-opacity': 0.85,
+          'line-gradient': ['interpolate', ['linear'], ['line-progress'], 0, color, 1, color],
+          'line-width': isFlight ? 4 : 4,
+          'line-opacity': isFlight ? 0.7 : 0.9,
         },
+
         layout: { 'line-join': 'round', 'line-cap': 'round' },
       })
       activeLayerIdsRef.current.add(layerId)
@@ -267,25 +270,19 @@ export default function EditorPage() {
 
   // ── Animation ───────────────────────────────────────────────────────────────
 
-  // Restore all route sources to their full coordinate data
+  // Restore all route lines to their fully-visible solid-colour state
   const restoreAllRoutes = useCallback(() => {
     const map = mapRef.current
     if (!map) return
     for (let i = 1; i < waypoints.length; i++) {
       const wp = waypoints[i]
-      const coords = routeData[waypoints[i - 1].id]?.[wp.id]?.rootCoords
-      if (!coords || coords.length === 0) continue
-      const source = map.getSource(`route-${wp.id}`) as maplibregl.GeoJSONSource | undefined
-      source?.setData({
-        type: 'Feature',
-        geometry: { type: 'LineString', coordinates: coords },
-        properties: {},
-      })
-      if (map.getLayer(`route-${wp.id}-layer`)) {
-        map.setPaintProperty(`route-${wp.id}-layer`, 'line-opacity', 0.85)
-      }
+      const layerId = `route-${wp.id}-layer`
+      if (!map.getLayer(layerId)) continue
+      const color = TRANSPORT_COLORS[wp.transportMode]
+      map.setPaintProperty(layerId, 'line-gradient', ['interpolate', ['linear'], ['line-progress'], 0, color, 1, color])
+      map.setPaintProperty(layerId, 'line-opacity', 0.85)
     }
-  }, [waypoints, routeData])
+  }, [waypoints])
 
   const playAnimation = useCallback(async () => {
     const map = mapRef.current
@@ -299,15 +296,6 @@ export default function EditorPage() {
         map.flyTo({ center: coords, zoom: 7, duration, curve: 1.42 })
         setTimeout(resolve, duration + 100)
       })
-
-    const setSourceCoords = (sourceId: string, coords: [number, number][]) => {
-      const source = map.getSource(sourceId) as maplibregl.GeoJSONSource | undefined
-      source?.setData({
-        type: 'Feature',
-        geometry: { type: 'LineString', coordinates: coords },
-        properties: {},
-      })
-    }
 
     try {
       // Hide all route lines (set opacity to 0)
@@ -326,13 +314,13 @@ export default function EditorPage() {
         if (!isPlayingRef.current) break
 
         const wp = waypoints[i]
-        const sourceId = `route-${wp.id}`
         const layerId = `route-${wp.id}-layer`
         const allCoords = routeData[waypoints[i - 1].id]?.[wp.id]?.rootCoords ?? []
+        const color = TRANSPORT_COLORS[wp.transportMode]
 
         if (allCoords.length >= 2 && map.getLayer(layerId)) {
-          // Reset source to just the first point stub, then make layer visible
-          setSourceCoords(sourceId, [allCoords[0], allCoords[0]])
+          // Set gradient to fully transparent, then reveal layer
+          map.setPaintProperty(layerId, 'line-gradient', ['interpolate', ['linear'], ['line-progress'], 0, 'rgba(0,0,0,0)', 1, 'rgba(0,0,0,0)'])
           map.setPaintProperty(layerId, 'line-opacity', 0.85)
         }
 
@@ -352,16 +340,21 @@ export default function EditorPage() {
         const start = performance.now()
 
         if (allCoords.length >= 2) {
-          // Grow the line by slicing coords on each frame
+          // Reveal the line by updating the gradient threshold — GPU-only, no geometry re-upload
           const animate = () => {
             if (!isPlayingRef.current) return
             const progress = Math.min((performance.now() - start) / DURATION, 1)
-            const count = Math.max(2, Math.floor(progress * allCoords.length))
-            setSourceCoords(sourceId, allCoords.slice(0, count))
-            const tip = allCoords[count - 1] as [number, number]
+            map.setPaintProperty(layerId, 'line-gradient', [
+              'step', ['line-progress'],
+              color,            // visible from 0 to progress
+              progress,
+              'rgba(0,0,0,0)', // transparent from progress to 1
+            ])
+            const tipIdx = Math.min(Math.floor(progress * (allCoords.length - 1)), allCoords.length - 1)
+            const tip = allCoords[tipIdx] as [number, number]
             tipMarkerRef.current?.setLngLat(tip)
-            if (count >= 2) {
-              const b = calcBearing(allCoords[count - 2] as [number, number], tip)
+            if (tipIdx > 0) {
+              const b = calcBearing(allCoords[tipIdx - 1] as [number, number], tip)
               const icon = tipMarkerRef.current?.getElement().firstElementChild as HTMLElement | null
               if (icon) icon.style.transform = `rotate(${b - TRANSPORT_BASE_ANGLE[wp.transportMode]}deg)`
             }
@@ -384,7 +377,9 @@ export default function EditorPage() {
         tipMarkerRef.current = null
 
         // Ensure fully revealed
-        if (allCoords.length >= 2) setSourceCoords(sourceId, allCoords)
+        if (allCoords.length >= 2 && map.getLayer(layerId)) {
+          map.setPaintProperty(layerId, 'line-gradient', ['interpolate', ['linear'], ['line-progress'], 0, color, 1, color])
+        }
 
         if (i < waypoints.length - 1 && isPlayingRef.current) {
           await sleep(600)
