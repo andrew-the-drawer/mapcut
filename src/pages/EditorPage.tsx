@@ -1,27 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
-import { MapboxOverlay } from '@deck.gl/mapbox'
-import { PathLayer } from '@deck.gl/layers'
 import KeyIcon from '../components/icons/KeyIcon'
 import MapOnboarding from '../components/MapOnboarding'
 import WaypointPanel, { type WaypointEntry } from '../components/WaypointPanel'
 import { ELocalStorageKey } from '../utils/constants'
 import { TRANSPORT_COLORS, type TransportMode } from '../lib/map/pathUtils'
 import { useRouteCoords } from '../hooks/useRouteCoords'
+import { ArcCustomLayer, type ArcSegment } from '../lib/map/ArcCustomLayer'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
-}
-
-function hexToRgb(hex: string): [number, number, number] {
-  return [
-    parseInt(hex.slice(1, 3), 16),
-    parseInt(hex.slice(3, 5), 16),
-    parseInt(hex.slice(5, 7), 16),
-  ]
 }
 
 const TRANSPORT_ICONS: Record<TransportMode, string> = {
@@ -143,7 +134,7 @@ function makeWaypointMarkerEl(): HTMLDivElement {
 export default function EditorPage() {
   const mapContainerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
-  const overlayRef = useRef<MapboxOverlay | null>(null)
+  const arcLayerRef = useRef<ArcCustomLayer | null>(null)
   const [mapLoaded, setMapLoaded] = useState(false)
 
   // Waypoint markers keyed by waypoint id
@@ -181,7 +172,7 @@ export default function EditorPage() {
 
     setMapLoaded(false)
     markers.clear()
-    overlayRef.current = null
+    arcLayerRef.current = null
 
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
@@ -190,6 +181,7 @@ export default function EditorPage() {
       zoom: 2,
       pitch: 45,
       bearing: 0,
+      canvasContextAttributes: {antialias: true}
     })
 
     mapRef.current = map
@@ -203,9 +195,9 @@ export default function EditorPage() {
       })
       map.setTerrain({ source: 'maptiler-dem', exaggeration: 1.5 })
 
-      const overlay = new MapboxOverlay({ layers: [] })
-      map.addControl(overlay)
-      overlayRef.current = overlay
+      const arcLayer = new ArcCustomLayer()
+      map.addLayer(arcLayer)
+      arcLayerRef.current = arcLayer
 
       setMapLoaded(true)
     })
@@ -213,7 +205,7 @@ export default function EditorPage() {
     return () => {
       map.remove()
       mapRef.current = null
-      overlayRef.current = null
+      arcLayerRef.current = null
       markers.clear()
       mapRouteLines.clear()
       setMapLoaded(false)
@@ -253,11 +245,11 @@ export default function EditorPage() {
   // ── Sync route lines ────────────────────────────────────────────────────────
 
   useEffect(() => {
-    const overlay = overlayRef.current
+    const arcLayer = arcLayerRef.current
     const map = mapRef.current
-    if (!overlay || !map || !mapLoaded) return
+    if (!arcLayer || !map || !mapLoaded) return
 
-    const pathLayers: PathLayer[] = []
+    const arcSegments: ArcSegment[] = []
     const activeNonFlyIds = new Set<string>()
 
     for (let i = 1; i < waypoints.length; i++) {
@@ -269,26 +261,17 @@ export default function EditorPage() {
       const color = TRANSPORT_COLORS[wp.transportMode]
 
       if (wp.transportMode === 'fly') {
-        // If a MapLibre layer exists for this id (mode was changed), remove it
+        // Remove MapLibre layer if mode was changed from non-fly
         if (mapRouteLinesRef.current.has(wp.id)) {
           removeMaplibreRoute(map, wp.id)
           mapRouteLinesRef.current.delete(wp.id)
         }
-        pathLayers.push(
-          new PathLayer({
-            id: `route-${wp.id}`,
-            data: [{ path: pair.rootCoords }],
-            getPath: (d) => d.path,
-            getColor: hexToRgb(color),
-            getWidth: 3,
-            widthUnits: 'pixels',
-            widthMinPixels: 2,
-            capRounded: true,
-            jointRounded: true,
-            billboard: false,
-            opacity: 0.7,
-          }),
-        )
+        arcSegments.push({
+          id: wp.id,
+          coords: pair.rootCoords,
+          color,
+          visibleCount: pair.rootCoords.length,
+        })
       } else {
         activeNonFlyIds.add(wp.id)
         if (map.getLayer(`ml-route-${wp.id}`)) {
@@ -309,7 +292,7 @@ export default function EditorPage() {
       }
     }
 
-    overlay.setProps({ layers: pathLayers })
+    arcLayer.setSegments(arcSegments)
   }, [mapLoaded, waypoints, routeData])
 
   // ── Waypoint actions ────────────────────────────────────────────────────────
@@ -347,11 +330,11 @@ export default function EditorPage() {
 
   // Restore all route lines to their fully-visible state
   const restoreAllRoutes = useCallback(() => {
-    const overlay = overlayRef.current
+    const arcLayer = arcLayerRef.current
     const map = mapRef.current
-    if (!overlay || !map) return
+    if (!arcLayer || !map) return
 
-    const pathLayers: PathLayer[] = []
+    const arcSegments: ArcSegment[] = []
 
     for (let i = 1; i < waypoints.length; i++) {
       const wp = waypoints[i]
@@ -362,21 +345,12 @@ export default function EditorPage() {
       const color = TRANSPORT_COLORS[wp.transportMode]
 
       if (wp.transportMode === 'fly') {
-        pathLayers.push(
-          new PathLayer({
-            id: `route-${wp.id}`,
-            data: [{ path: pair.rootCoords }],
-            getPath: (d) => d.path,
-            getColor: hexToRgb(color),
-            getWidth: 3,
-            widthUnits: 'pixels',
-            widthMinPixels: 2,
-            capRounded: true,
-            jointRounded: true,
-            billboard: false,
-            opacity: 0.7,
-          }),
-        )
+        arcSegments.push({
+          id: wp.id,
+          coords: pair.rootCoords,
+          color,
+          visibleCount: pair.rootCoords.length,
+        })
       } else {
         if (map.getLayer(`ml-route-${wp.id}`)) {
           updateMaplibreRoute(map, wp.id, pair.rootCoords)
@@ -388,13 +362,13 @@ export default function EditorPage() {
       }
     }
 
-    overlay.setProps({ layers: pathLayers })
+    arcLayer.setSegments(arcSegments)
   }, [waypoints, routeData])
 
   const playAnimation = useCallback(async () => {
     const map = mapRef.current
-    const overlay = overlayRef.current
-    if (!map || !overlay || waypoints.length < 2 || isAnimating) return
+    const arcLayer = arcLayerRef.current
+    if (!map || !arcLayer || waypoints.length < 2 || isAnimating) return
 
     setIsAnimating(true)
     isPlayingRef.current = true
@@ -406,15 +380,20 @@ export default function EditorPage() {
       })
 
     try {
-      // Hide all routes
-      overlay.setProps({ layers: [] })
+      // Hide all fly-mode arcs
+      arcLayer.setSegments([])
+
+      // Fade out non-fly MapLibre routes
+      for (const id of mapRouteLinesRef.current) {
+        setMaplibreRouteOpacity(map, id, 0)
+      }
 
       // Fly to the first waypoint
       await flyAndWait(waypoints[0].coordinates, 2000)
       if (!isPlayingRef.current) return
 
-      // Accumulates fully-revealed layers for completed segments
-      const completedLayers: PathLayer[] = []
+      // Accumulates fully-revealed arc segments for completed fly legs
+      const completedSegments: ArcSegment[] = []
 
       // Animate each segment
       for (let i = 1; i < waypoints.length; i++) {
@@ -422,7 +401,7 @@ export default function EditorPage() {
 
         const wp = waypoints[i]
         const allCoords = routeData[waypoints[i - 1].id]?.[wp.id]?.rootCoords ?? []
-        const rgb = hexToRgb(TRANSPORT_COLORS[wp.transportMode])
+        const color = TRANSPORT_COLORS[wp.transportMode]
 
         // Create tip marker for this segment
         tipMarkerRef.current?.remove()
@@ -440,41 +419,65 @@ export default function EditorPage() {
         const start = performance.now()
 
         if (allCoords.length >= 2) {
-          // Slice coord array per frame — deck.gl diffs and re-uploads only changed geometry
-          const animate = () => {
-            if (!isPlayingRef.current) return
-            const progress = Math.min((performance.now() - start) / DURATION, 1)
-            const sliceEnd = Math.max(2, Math.ceil(progress * allCoords.length))
-            const revealedCoords = allCoords.slice(0, sliceEnd)
+          if (wp.transportMode === 'fly') {
+            // Register the segment with minimal visible points so Three.js knows about it
+            arcLayer.setSegments([
+              ...completedSegments,
+              { id: wp.id, coords: allCoords, color, visibleCount: 2 },
+            ])
 
-            const currentLayer = new PathLayer({
-              id: `route-${wp.id}-anim`,
-              data: [{ path: revealedCoords }],
-              getPath: (d) => d.path,
-              getColor: rgb,
-              getWidth: 4,
-              widthUnits: 'pixels',
-              widthMinPixels: 2,
-              capRounded: true,
-              jointRounded: true,
-              billboard: false,
-            })
-            overlay.setProps({ layers: [...completedLayers, currentLayer] })
+            const animate = () => {
+              if (!isPlayingRef.current) return
+              const progress = Math.min((performance.now() - start) / DURATION, 1)
+              const sliceEnd = Math.max(2, Math.ceil(progress * allCoords.length))
 
-            const tipIdx = Math.min(Math.floor(progress * (allCoords.length - 1)), allCoords.length - 1)
-            const tip = allCoords[tipIdx] as [number, number]
-            tipMarkerRef.current?.setLngLat(tip)
-            if (tipIdx > 0) {
-              const b = calcBearing(allCoords[tipIdx - 1] as [number, number], tip)
-              const icon = tipMarkerRef.current?.getElement().firstElementChild as HTMLElement | null
-              if (icon) icon.style.transform = `rotate(${b - TRANSPORT_BASE_ANGLE[wp.transportMode]}deg)`
+              arcLayer.updateAnimation(wp.id, sliceEnd)
+
+              const tipIdx = Math.min(Math.floor(progress * (allCoords.length - 1)), allCoords.length - 1)
+              const tip = allCoords[tipIdx] as [number, number]
+              tipMarkerRef.current?.setLngLat(tip)
+              if (tipIdx > 0) {
+                const b = calcBearing(allCoords[tipIdx - 1] as [number, number], tip)
+                const icon = tipMarkerRef.current?.getElement().firstElementChild as HTMLElement | null
+                if (icon) icon.style.transform = `rotate(${b - TRANSPORT_BASE_ANGLE[wp.transportMode]}deg)`
+              }
+
+              if (progress < 1) {
+                animFrameRef.current = requestAnimationFrame(animate)
+              }
             }
+            animFrameRef.current = requestAnimationFrame(animate)
+          } else {
+            // Non-fly: progressively reveal via MapLibre GeoJSON update
+            const animate = () => {
+              if (!isPlayingRef.current) return
+              const progress = Math.min((performance.now() - start) / DURATION, 1)
+              const sliceEnd = Math.max(2, Math.ceil(progress * allCoords.length))
+              const revealedCoords = allCoords.slice(0, sliceEnd)
 
-            if (progress < 1) {
-              animFrameRef.current = requestAnimationFrame(animate)
+              if (map.getSource(`ml-route-${wp.id}`)) {
+                updateMaplibreRoute(map, wp.id, revealedCoords)
+                setMaplibreRouteOpacity(map, wp.id, 0.9)
+              } else {
+                addMaplibreRoute(map, wp.id, revealedCoords, color, 0.9)
+                mapRouteLinesRef.current.add(wp.id)
+              }
+
+              const tipIdx = Math.min(Math.floor(progress * (allCoords.length - 1)), allCoords.length - 1)
+              const tip = allCoords[tipIdx] as [number, number]
+              tipMarkerRef.current?.setLngLat(tip)
+              if (tipIdx > 0) {
+                const b = calcBearing(allCoords[tipIdx - 1] as [number, number], tip)
+                const icon = tipMarkerRef.current?.getElement().firstElementChild as HTMLElement | null
+                if (icon) icon.style.transform = `rotate(${b - TRANSPORT_BASE_ANGLE[wp.transportMode]}deg)`
+              }
+
+              if (progress < 1) {
+                animFrameRef.current = requestAnimationFrame(animate)
+              }
             }
+            animFrameRef.current = requestAnimationFrame(animate)
           }
-          animFrameRef.current = requestAnimationFrame(animate)
         }
 
         await flyAndWait(wp.coordinates, DURATION)
@@ -487,23 +490,15 @@ export default function EditorPage() {
         tipMarkerRef.current?.remove()
         tipMarkerRef.current = null
 
-        // Push fully-revealed segment into the completed set
-        if (allCoords.length >= 2) {
-          completedLayers.push(
-            new PathLayer({
-              id: `route-${wp.id}`,
-              data: [{ path: allCoords }],
-              getPath: (d) => d.path,
-              getColor: rgb,
-              getWidth: 4,
-              widthUnits: 'pixels',
-              widthMinPixels: 2,
-              capRounded: true,
-              jointRounded: true,
-              billboard: false,
-            }),
-          )
-          overlay.setProps({ layers: completedLayers })
+        // Push fully-revealed fly segment into completed set
+        if (allCoords.length >= 2 && wp.transportMode === 'fly') {
+          completedSegments.push({
+            id: wp.id,
+            coords: allCoords,
+            color,
+            visibleCount: allCoords.length,
+          })
+          arcLayer.setSegments(completedSegments)
         }
 
         if (i < waypoints.length - 1 && isPlayingRef.current) {
