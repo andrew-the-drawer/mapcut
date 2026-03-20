@@ -37,6 +37,7 @@ export class ArcCustomLayer implements maplibregl.CustomLayerInterface {
   private segments = new Map<string, { line: Line2; coords: number[][]; totalSegments: number }>()
   private map?: maplibregl.Map
   private _resizeHandler?: () => void
+  private _mvpMatrix = new THREE.Matrix4()
 
   onAdd(map: maplibregl.Map, gl: WebGLRenderingContext | WebGL2RenderingContext): void {
     this.map = map
@@ -77,12 +78,30 @@ export class ArcCustomLayer implements maplibregl.CustomLayerInterface {
   }
 
   render(gl: WebGLRenderingContext | WebGL2RenderingContext, args: maplibregl.CustomRenderMethodInput): void {
-    this.camera.projectionMatrix.fromArray(args.modelViewProjectionMatrix)
+    this._mvpMatrix.fromArray(args.modelViewProjectionMatrix)
+    this.camera.projectionMatrix.copy(this._mvpMatrix)
 
     this.renderer.resetState()
     this.renderer.render(this.scene, this.camera)
 
     this.map?.triggerRepaint();
+  }
+
+  /**
+   * Project a lng/lat/alt coordinate to screen pixel coordinates using the
+   * latest MVP matrix from the render loop.
+   */
+  projectToScreen(lng: number, lat: number, altMeters: number): { x: number; y: number } | null {
+    const [gx, gy, gz] = lngLatAltToGlobe(lng, lat, altMeters)
+    const vec = new THREE.Vector4(gx, gy, gz, 1).applyMatrix4(this._mvpMatrix)
+    if (vec.w <= 0) return null // behind camera
+    const ndcX = vec.x / vec.w
+    const ndcY = vec.y / vec.w
+    const canvas = this.map!.getCanvas()
+    return {
+      x: ((ndcX + 1) / 2) * canvas.clientWidth,
+      y: ((1 - ndcY) / 2) * canvas.clientHeight,
+    }
   }
 
   setSegments(desired: ArcSegment[]): void {

@@ -15,55 +15,63 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-const TRANSPORT_ICONS: Record<TransportMode, string> = {
-  fly: '✈',
-  drive: '🚗',
-  train: '🚄',
-  walk: '🚶',
-}
-
-// Base angle of the emoji when unrotated (degrees clockwise from north).
-// ✈ points upper-right (~NE = 45°), others face right (~E = 90°).
-const TRANSPORT_BASE_ANGLE: Record<TransportMode, number> = {
-  fly: 45,
-  drive: 90,
-  train: 90,
-  walk: 90,
+// SVG path data for transport icons (all oriented pointing UP / north)
+const TRANSPORT_SVG: Record<TransportMode, { viewBox: string; path: string }> = {
+  fly: {
+    viewBox: '0 0 24 24',
+    path: 'M21 16v-2l-8-5V3.5A1.5 1.5 0 0 0 11.5 2 1.5 1.5 0 0 0 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z',
+  },
+  drive: {
+    viewBox: '0 0 24 24',
+    path: 'M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z',
+  },
+  train: {
+    viewBox: '0 0 24 24',
+    path: 'M12 2c-4 0-8 .5-8 4v9.5C4 17.43 5.57 19 7.5 19L6 20.5v.5h2l2-2h4l2 2h2v-.5L16.5 19c1.93 0 3.5-1.57 3.5-3.5V6c0-3.5-4-4-8-4zM7.5 17c-.83 0-1.5-.67-1.5-1.5S6.67 14 7.5 14s1.5.67 1.5 1.5S8.33 17 7.5 17zm3.5-6H6V6h5v5zm2 0V6h5v5h-5zm3.5 6c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z',
+  },
+  walk: {
+    viewBox: '0 0 24 24',
+    path: 'M13.5 5.5c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zM9.8 8.9L7 23h2.1l1.8-8 2.1 2v6h2v-7.5l-2.1-2 .6-3C14.8 12 16.8 13 19 13v-2c-1.9 0-3.5-1-4.3-2.4l-1-1.6c-.4-.6-1-1-1.7-1-.3 0-.5.1-.8.1L6 8.3V13h2V9.6l1.8-.7z',
+  },
 }
 
 function makeTipMarkerEl(mode: TransportMode): HTMLDivElement {
   const el = document.createElement('div')
   const color = TRANSPORT_COLORS[mode]
   el.style.cssText = `
-    width: 28px;
-    height: 28px;
-    background: ${color}22;
-    border: 2px solid ${color};
+    width: 40px;
+    height: 40px;
+    background: ${color};
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 14px;
-    box-shadow: 0 0 10px ${color}88;
+    box-shadow: 0 0 16px ${color}aa, 0 0 32px ${color}55;
     pointer-events: none;
     user-select: none;
   `
-  const icon = document.createElement('span')
-  icon.style.cssText = 'display:inline-block;transition:transform 0.1s linear;'
-  icon.textContent = TRANSPORT_ICONS[mode]
-  el.appendChild(icon)
+  const { viewBox, path } = TRANSPORT_SVG[mode]
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  svg.setAttribute('width', '22')
+  svg.setAttribute('height', '22')
+  svg.setAttribute('viewBox', viewBox)
+  svg.setAttribute('fill', 'white')
+  svg.style.cssText = 'display:block;transition:transform 0.1s linear;'
+  const p = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+  p.setAttribute('d', path)
+  svg.appendChild(p)
+  el.appendChild(svg)
   return el
 }
 
-// Bearing in degrees clockwise from north between two [lng, lat] points.
-function calcBearing(from: [number, number], to: [number, number]): number {
+// Haversine distance in km between two [lng, lat] points.
+function haversine(a: [number, number], b: [number, number]): number {
   const toRad = (d: number) => (d * Math.PI) / 180
-  const toDeg = (r: number) => (r * 180) / Math.PI
-  const lat1 = toRad(from[1]), lat2 = toRad(to[1])
-  const dLng = toRad(to[0] - from[0])
-  const y = Math.sin(dLng) * Math.cos(lat2)
-  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng)
-  return (toDeg(Math.atan2(y, x)) + 360) % 360
+  const R = 6371
+  const dLat = toRad(b[1] - a[1])
+  const dLng = toRad(b[0] - a[0])
+  const sin2 = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a[1])) * Math.cos(toRad(b[1])) * Math.sin(dLng / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(sin2), Math.sqrt(1 - sin2))
 }
 
 // ── MapLibre route line helpers ───────────────────────────────────────────────
@@ -143,6 +151,8 @@ export default function EditorPage() {
   const animFrameRef = useRef<number | null>(null)
   const isPlayingRef = useRef(false)
   const tipMarkerRef = useRef<maplibregl.Marker | null>(null)
+  // Raw DOM element for fly-mode tip (positioned via 3D projection onto arc)
+  const flyTipElRef = useRef<HTMLDivElement | null>(null)
   // Tracks which waypoint IDs have active MapLibre route source/layers (non-fly modes)
   const mapRouteLinesRef = useRef<Set<string>>(new Set())
 
@@ -373,10 +383,79 @@ export default function EditorPage() {
     setIsAnimating(true)
     isPlayingRef.current = true
 
+    // Helper: remove any active tip marker/element
+    const removeTip = () => {
+      tipMarkerRef.current?.remove()
+      tipMarkerRef.current = null
+      if (flyTipElRef.current) {
+        flyTipElRef.current.remove()
+        flyTipElRef.current = null
+      }
+    }
+
+    // Helper: update route reveal & tip marker for a given progress (0–1)
+    const updateSegmentProgress = (
+      wp: WaypointEntry,
+      allCoords: number[][],
+      color: string,
+      progress: number,
+    ) => {
+      const clampedProgress = Math.max(0, Math.min(progress, 1))
+      const sliceEnd = Math.max(2, Math.ceil(clampedProgress * allCoords.length))
+
+      if (wp.transportMode === 'fly') {
+        arcLayer.updateAnimation(wp.id, sliceEnd)
+      } else {
+        const revealedCoords = allCoords.slice(0, sliceEnd)
+        if (map.getSource(`ml-route-${wp.id}`)) {
+          updateMaplibreRoute(map, wp.id, revealedCoords)
+          setMaplibreRouteOpacity(map, wp.id, 0.9)
+        } else {
+          addMaplibreRoute(map, wp.id, revealedCoords, color, 0.9)
+          mapRouteLinesRef.current.add(wp.id)
+        }
+      }
+
+      // Move tip marker along route
+      const tipIdx = Math.min(Math.floor(clampedProgress * (allCoords.length - 1)), allCoords.length - 1)
+      const tipCoord = allCoords[tipIdx]
+
+      if (wp.transportMode === 'fly') {
+        // Position fly-mode tip via 3D projection onto the arc
+        const el = flyTipElRef.current
+        if (el) {
+          const screen = arcLayer.projectToScreen(tipCoord[0], tipCoord[1], tipCoord[2] ?? 0)
+          if (screen) {
+            el.style.transform = `translate(${screen.x - 20}px, ${screen.y - 20}px)`
+            el.style.display = 'flex'
+            // Compute bearing in screen space so it stays aligned under any camera zoom/pitch
+            const svg = el.firstElementChild as HTMLElement | null
+            if (svg && tipIdx > 0) {
+              const prevCoord = allCoords[tipIdx - 1]
+              const prevScreen = arcLayer.projectToScreen(prevCoord[0], prevCoord[1], prevCoord[2] ?? 0)
+              if (prevScreen) {
+                const dx = screen.x - prevScreen.x
+                const dy = screen.y - prevScreen.y
+                // SVG plane points up (north); screen atan2 + 90° maps to CSS clockwise rotation
+                const screenBearing = Math.atan2(dy, dx) * (180 / Math.PI) + 90
+                svg.style.transform = `rotate(${screenBearing}deg)`
+              }
+            }
+          } else {
+            el.style.display = 'none'
+          }
+        }
+      } else {
+        // Non-fly: use MapLibre Marker (ground-level), no rotation needed
+        tipMarkerRef.current?.setLngLat(tipCoord as [number, number])
+      }
+    }
+
+    // Fly camera and wait, resolving on moveend
     const flyAndWait = (coords: [number, number], duration: number) =>
       new Promise<void>(resolve => {
         map.flyTo({ center: coords, zoom: 7, duration, curve: 1.42 })
-        setTimeout(resolve, duration + 100)
+        map.once('moveend', () => resolve())
       })
 
     try {
@@ -402,21 +481,35 @@ export default function EditorPage() {
         const wp = waypoints[i]
         const allCoords = routeData[waypoints[i - 1].id]?.[wp.id]?.rootCoords ?? []
         const color = TRANSPORT_COLORS[wp.transportMode]
+        const startCoord = allCoords[0] as [number, number]
+        const endCoord = allCoords[allCoords.length - 1] as [number, number]
+        const totalDist = haversine(startCoord, endCoord)
 
         // Create tip marker for this segment
-        tipMarkerRef.current?.remove()
-        tipMarkerRef.current = null
+        removeTip()
         if (allCoords.length >= 2) {
-          tipMarkerRef.current = new maplibregl.Marker({
-            element: makeTipMarkerEl(wp.transportMode),
-            anchor: 'center',
-          })
-            .setLngLat(allCoords[0] as [number, number])
-            .addTo(map)
+          if (wp.transportMode === 'fly') {
+            // Fly mode: raw DOM element positioned via 3D projection
+            const el = makeTipMarkerEl(wp.transportMode)
+            el.style.position = 'absolute'
+            el.style.left = '0'
+            el.style.top = '0'
+            el.style.zIndex = '10'
+            el.style.display = 'none'
+            mapContainerRef.current!.appendChild(el)
+            flyTipElRef.current = el
+          } else {
+            // Non-fly: MapLibre Marker on ground
+            tipMarkerRef.current = new maplibregl.Marker({
+              element: makeTipMarkerEl(wp.transportMode),
+              anchor: 'center',
+            })
+              .setLngLat(startCoord)
+              .addTo(map)
+          }
         }
 
         const DURATION = 3500
-        const start = performance.now()
 
         if (allCoords.length >= 2) {
           if (wp.transportMode === 'fly') {
@@ -425,70 +518,34 @@ export default function EditorPage() {
               ...completedSegments,
               { id: wp.id, coords: allCoords, color, visibleCount: 2 },
             ])
-
-            const animate = () => {
-              if (!isPlayingRef.current) return
-              const progress = Math.min((performance.now() - start) / DURATION, 1)
-              const sliceEnd = Math.max(2, Math.ceil(progress * allCoords.length))
-
-              arcLayer.updateAnimation(wp.id, sliceEnd)
-
-              const tipIdx = Math.min(Math.floor(progress * (allCoords.length - 1)), allCoords.length - 1)
-              const tip = allCoords[tipIdx] as [number, number]
-              tipMarkerRef.current?.setLngLat(tip)
-              if (tipIdx > 0) {
-                const b = calcBearing(allCoords[tipIdx - 1] as [number, number], tip)
-                const icon = tipMarkerRef.current?.getElement().firstElementChild as HTMLElement | null
-                if (icon) icon.style.transform = `rotate(${b - TRANSPORT_BASE_ANGLE[wp.transportMode]}deg)`
-              }
-
-              if (progress < 1) {
-                animFrameRef.current = requestAnimationFrame(animate)
-              }
-            }
-            animFrameRef.current = requestAnimationFrame(animate)
-          } else {
-            // Non-fly: progressively reveal via MapLibre GeoJSON update
-            const animate = () => {
-              if (!isPlayingRef.current) return
-              const progress = Math.min((performance.now() - start) / DURATION, 1)
-              const sliceEnd = Math.max(2, Math.ceil(progress * allCoords.length))
-              const revealedCoords = allCoords.slice(0, sliceEnd)
-
-              if (map.getSource(`ml-route-${wp.id}`)) {
-                updateMaplibreRoute(map, wp.id, revealedCoords)
-                setMaplibreRouteOpacity(map, wp.id, 0.9)
-              } else {
-                addMaplibreRoute(map, wp.id, revealedCoords, color, 0.9)
-                mapRouteLinesRef.current.add(wp.id)
-              }
-
-              const tipIdx = Math.min(Math.floor(progress * (allCoords.length - 1)), allCoords.length - 1)
-              const tip = allCoords[tipIdx] as [number, number]
-              tipMarkerRef.current?.setLngLat(tip)
-              if (tipIdx > 0) {
-                const b = calcBearing(allCoords[tipIdx - 1] as [number, number], tip)
-                const icon = tipMarkerRef.current?.getElement().firstElementChild as HTMLElement | null
-                if (icon) icon.style.transform = `rotate(${b - TRANSPORT_BASE_ANGLE[wp.transportMode]}deg)`
-              }
-
-              if (progress < 1) {
-                animFrameRef.current = requestAnimationFrame(animate)
-              }
-            }
-            animFrameRef.current = requestAnimationFrame(animate)
           }
+
+          // Drive route animation from camera movement (syncs with flyTo easing)
+          const onMove = () => {
+            if (!isPlayingRef.current) return
+            const center = map.getCenter()
+            const distFromStart = haversine(startCoord, [center.lng, center.lat])
+            const progress = totalDist > 0 ? Math.min(distFromStart / totalDist, 1) : 1
+            updateSegmentProgress(wp, allCoords, color, progress)
+          }
+
+          map.on('move', onMove)
+
+          // Start flyTo — the move handler drives the route reveal
+          await new Promise<void>(resolve => {
+            map.flyTo({ center: wp.coordinates, zoom: 7, duration: DURATION, curve: 1.42 })
+            map.once('moveend', () => {
+              map.off('move', onMove)
+              // Ensure fully revealed
+              updateSegmentProgress(wp, allCoords, color, 1)
+              resolve()
+            })
+          })
+        } else {
+          await flyAndWait(wp.coordinates, DURATION)
         }
 
-        await flyAndWait(wp.coordinates, DURATION)
-
-        if (animFrameRef.current) {
-          cancelAnimationFrame(animFrameRef.current)
-          animFrameRef.current = null
-        }
-
-        tipMarkerRef.current?.remove()
-        tipMarkerRef.current = null
+        removeTip()
 
         // Push fully-revealed fly segment into completed set
         if (allCoords.length >= 2 && wp.transportMode === 'fly') {
@@ -506,6 +563,7 @@ export default function EditorPage() {
         }
       }
     } finally {
+      removeTip()
       restoreAllRoutes()
       isPlayingRef.current = false
       setIsAnimating(false)
@@ -520,6 +578,10 @@ export default function EditorPage() {
     }
     tipMarkerRef.current?.remove()
     tipMarkerRef.current = null
+    if (flyTipElRef.current) {
+      flyTipElRef.current.remove()
+      flyTipElRef.current = null
+    }
     restoreAllRoutes()
     setIsAnimating(false)
   }, [restoreAllRoutes])
