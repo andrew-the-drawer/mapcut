@@ -34,7 +34,7 @@ export class ArcCustomLayer implements maplibregl.CustomLayerInterface {
   private renderer!: THREE.WebGLRenderer
   private scene!: THREE.Scene
   private camera!: THREE.Camera
-  private segments = new Map<string, { line: Line2; coords: number[][] }>()
+  private segments = new Map<string, { line: Line2; coords: number[][]; totalSegments: number }>()
   private map?: maplibregl.Map
   private _resizeHandler?: () => void
 
@@ -61,6 +61,7 @@ export class ArcCustomLayer implements maplibregl.CustomLayerInterface {
     map.on('resize', this._resizeHandler)
   }
 
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onRemove(_map: maplibregl.Map, _gl: WebGLRenderingContext | WebGL2RenderingContext): void {
     if (this.map && this._resizeHandler) {
       this.map.off('resize', this._resizeHandler)
@@ -91,7 +92,7 @@ export class ArcCustomLayer implements maplibregl.CustomLayerInterface {
       if (!desiredIds.has(id)) {
         this.scene.remove(line)
         line.geometry.dispose()
-        ;(line.material as LineMaterial).dispose()
+        line.material.dispose()
         this.segments.delete(id)
       }
     }
@@ -102,31 +103,25 @@ export class ArcCustomLayer implements maplibregl.CustomLayerInterface {
         ;(existing.line.material as LineMaterial).color.set(seg.color)
         this.updateAnimation(seg.id, seg.visibleCount)
       } else {
-        const line = this._buildLine(
-          seg.coords.slice(0, seg.visibleCount),
-          seg.color,
-        )
+        // Always build the line with ALL coordinates so the GPU buffer is fully
+        // allocated once. We control how much of the line is visible via
+        // geometry.instanceCount — no per-frame buffer reallocation needed.
+        const line = this._buildLine(seg.coords, seg.color)
+        const totalSegments = Math.max(seg.coords.length - 1, 1)
+        const visibleSegments = Math.max(Math.min(seg.visibleCount, seg.coords.length) - 1, 1)
+        line.geometry.instanceCount = visibleSegments
         this.scene.add(line)
-        this.segments.set(seg.id, { line, coords: seg.coords })
+        this.segments.set(seg.id, { line, coords: seg.coords, totalSegments })
       }
     }
-    this.map?.triggerRepaint()
   }
 
   updateAnimation(id: string, visibleCount: number): void {
     const entry = this.segments.get(id)
     if (!entry) return
 
-    const sliced = entry.coords.slice(0, Math.max(2, visibleCount))
-    const positions: number[] = []
-    for (const pt of sliced) {
-      const [gx, gy, gz] = lngLatAltToGlobe(pt[0], pt[1], pt[2] ?? 0)
-      positions.push(gx, gy, gz)
-    }
-
-    ;(entry.line.geometry as LineGeometry).setPositions(positions)
-    entry.line.computeLineDistances()
-    this.map?.triggerRepaint()
+    const clamped = Math.max(2, Math.min(visibleCount, entry.coords.length))
+    entry.line.geometry.instanceCount = clamped - 1
   }
 
   private _buildLine(coords: number[][], color: string, width = 3): Line2 {

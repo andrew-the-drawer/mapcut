@@ -1,96 +1,94 @@
-# Fix Three.js Arc Layer on MapLibre Globe
+# Three.js Arc Layer on MapLibre Globe — Bug Fixes
 
 ## Context
 
-The `ArcCustomLayer` renders Three.js `Line2` arcs between waypoints on a MapLibre v5 globe. The arcs are currently **invisible**. The geodesic path calculation in `pathUtils.ts` is mathematically correct (standard slerp + sine altitude arc). The issue is in `ArcCustomLayer.ts`.
+The `ArcCustomLayer` renders Three.js `Line2` arcs between waypoints on a MapLibre v5 globe. All changes in `src/lib/map/ArcCustomLayer.ts`.
 
-## Root Cause Analysis
+---
 
-**Two confirmed bugs + one minor bug**, verified by reading MapLibre v5.19 source code:
+## Fix 1: Static arcs invisible (RESOLVED)
 
-### Bug 1 (PRIMARY — arcs invisible): Wrong projection matrix + wrong coordinate space
+**Three bugs**, verified by reading MapLibre v5.19 source code:
 
-The current code uses:
-```typescript
-this.camera.projectionMatrix.fromArray(args.defaultProjectionData.mainMatrix)
-```
-with Mercator [0,1] coordinates from `MercatorCoordinate.fromLngLat()`.
+### Bug 1a (PRIMARY): Wrong projection matrix + wrong coordinate space
 
-In **globe mode**, `defaultProjectionData.mainMatrix` comes from `VerticalPerspectiveTransform.getProjectionData()` — this is designed for MapLibre's internal tile shader pipeline (which converts tile→mercator→sphere in GLSL *before* applying this matrix). Using it directly with raw Mercator coords produces garbage output.
+Used `args.defaultProjectionData.mainMatrix` with Mercator `[0,1]` coordinates. In globe mode, that matrix is for MapLibre's internal tile shader pipeline — not for custom layer geometry.
 
-The correct matrix is **`args.modelViewProjectionMatrix`**, which in globe mode equals `_globeViewProjMatrixNoCorrection`. This matrix accepts **unit-sphere coordinates** directly (confirmed at `maplibre-gl-csp-dev.js:53507-53508`):
-```javascript
-// MapLibre internal usage:
-const spherePos = projectTileCoordinatesToSphere(x, y, ...)
-const vectorMultiplier = 1.0 + elevation / earthRadius
-const pos = [spherePos[0]*vectorMultiplier, spherePos[1]*vectorMultiplier, spherePos[2]*vectorMultiplier, 1]
-transformMat4(pos, pos, this._globeViewProjMatrixNoCorrection)
-```
-
-### Bug 2 (lines are 1px): Missing `linewidth` in LineMaterial
-
-`_buildLine(coords, color, width = 3)` declares `width` but never passes it to `LineMaterial`. Default linewidth is 1px.
-
-### Bug 3 (minor): `camera.matrixAutoUpdate` not disabled
-
-Wastes computation; should be `false` since we set the projection matrix manually.
-
-## Implementation Plan
-
-All changes in `src/lib/map/ArcCustomLayer.ts`.
-
-### Step 1: Replace coordinate conversion function
-
-Replace `lngLatAltToMercator` with `lngLatAltToGlobe` using MapLibre's globe convention (`angularCoordinatesRadiansToVector` at line 52501):
+**Fix:** Use `args.modelViewProjectionMatrix` (= `_globeViewProjMatrixNoCorrection` in globe mode) which accepts unit-sphere coordinates directly. Replace `lngLatAltToMercator` with `lngLatAltToGlobe`:
 
 ```typescript
-const EARTH_RADIUS = 6_371_008.8 // meters, matches MapLibre
-
+const EARTH_RADIUS = 6_371_008.8
 function lngLatAltToGlobe(lng: number, lat: number, altMeters: number): [number, number, number] {
   const lngRad = (lng * Math.PI) / 180
   const latRad = (lat * Math.PI) / 180
-  const r = 1.0 + altMeters / EARTH_RADIUS  // unit sphere + altitude ratio
+  const r = 1.0 + altMeters / EARTH_RADIUS
   return [
-    Math.sin(lngRad) * Math.cos(latRad) * r,  // X
-    Math.sin(latRad) * r,                       // Y
-    Math.cos(lngRad) * Math.cos(latRad) * r,   // Z
+    Math.sin(lngRad) * Math.cos(latRad) * r,
+    Math.sin(latRad) * r,
+    Math.cos(lngRad) * Math.cos(latRad) * r,
   ]
 }
 ```
 
-Update both `_buildLine()` and `updateAnimation()` to call `lngLatAltToGlobe` instead of `lngLatAltToMercator`.
+### Bug 1b: Missing `linewidth` in LineMaterial
 
-### Step 2: Change projection matrix source
+`_buildLine()` declared `width` but never passed it to `LineMaterial`. Default was 1px.
 
-In `render()`:
+### Bug 1c (minor): `camera.matrixAutoUpdate` not disabled
+
+Set to `false` since we assign the projection matrix manually each frame.
+
+---
+
+## Fix 2: Arc animation not drawing (RESOLVED)
+
+### Root cause: Per-frame GPU buffer reallocation on a shared WebGL context
+
+`updateAnimation()` called `geometry.setPositions()` every animation frame:
+
 ```typescript
-// BEFORE:
-this.camera.projectionMatrix.fromArray(args.defaultProjectionData.mainMatrix)
-// AFTER:
-this.camera.projectionMatrix.fromArray(args.modelViewProjectionMatrix)
+// OLD — broken
+updateAnimation(id: string, visibleCount: number): void {
+  const sliced = entry.coords.slice(0, Math.max(2, visibleCount))
+  const positions: number[] = []
+  for (const pt of sliced) { /* ... */ positions.push(gx, gy, gz) }
+  entry.line.geometry.setPositions(positions)   // ← allocates new InstancedInterleavedBuffer each frame
+  entry.line.computeLineDistances()
+}
 ```
 
-### Step 3: Fix linewidth
+`LineGeometry.setPositions()` creates an entirely new `InstancedInterleavedBuffer` (new GPU buffer object) each call. On a shared WebGL context where `renderer.resetState()` is called every frame (required for MapLibre coexistence), Three.js's internal buffer tracking (`WebGLAttributes`, `WebGLBindingStates`) loses track of the freshly-allocated buffers — the line silently disappears.
 
-In `_buildLine()`, add `linewidth: width` to LineMaterial constructor.
+### Fix: Pre-allocate full geometry, animate via `instanceCount`
 
-### Step 4: Disable camera matrixAutoUpdate
+`LineGeometry` extends `InstancedBufferGeometry`. Each point-to-point segment is one GPU instance. Setting `geometry.instanceCount` controls how many segments the GPU draws — no buffer work needed.
 
-In `onAdd()`, after creating camera:
 ```typescript
-this.camera.matrixAutoUpdate = false
+// setSegments — build line with ALL coords upfront
+const line = this._buildLine(seg.coords, seg.color)       // full geometry
+const totalSegments = Math.max(seg.coords.length - 1, 1)
+line.geometry.instanceCount = visibleSegments              // show partial
+this.segments.set(seg.id, { line, coords: seg.coords, totalSegments })
+
+// updateAnimation — single integer assignment per frame
+updateAnimation(id: string, visibleCount: number): void {
+  const entry = this.segments.get(id)
+  if (!entry) return
+  const clamped = Math.max(2, Math.min(visibleCount, entry.coords.length))
+  entry.line.geometry.instanceCount = clamped - 1
+}
 ```
 
-### Step 5: Depth test tuning (if needed)
+This is both correct (no buffer reallocation on shared GL context) and more performant (zero GPU allocation per frame).
 
-If arcs are partially occluded after steps 1-4, switch to `depthTest: false, depthWrite: false` in LineMaterial. Since the arcs have altitude they should render above the globe, but depth buffer compatibility between MapLibre's globe and Three.js unit-sphere z-values may not be perfect.
+---
 
 ## Verification
 
 1. Add two waypoints with `fly` transport mode
 2. Arcs should be visible as curved 3D lines above the globe surface
-3. Play animation — arcs should progressively reveal
-4. Rotate the globe — arcs on the back side should be occluded (if depthTest is on) or always visible (if off)
+3. Play animation — arcs should progressively reveal (line draws from start to end)
+4. Rotate the globe — arcs on the back side should be occluded (depthTest is on)
 5. Zoom in past globe→mercator transition threshold — arcs may disappear (known limitation; globe-primary for now)
 
 ## Key Source References
