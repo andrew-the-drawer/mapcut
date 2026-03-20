@@ -124,7 +124,7 @@ export class ArcCustomLayer implements maplibregl.CustomLayerInterface {
     entry.line.geometry.instanceCount = clamped - 1
   }
 
-  private _buildLine(coords: number[][], color: string, width = 3): Line2 {
+  private _buildLine(coords: number[][], color: string, width = 10): Line2 {
     const positions: number[] = []
     for (const pt of coords) {
       const [gx, gy, gz] = lngLatAltToGlobe(pt[0], pt[1], pt[2] ?? 0)
