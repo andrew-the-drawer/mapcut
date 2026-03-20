@@ -91,7 +91,7 @@ function addMaplibreRoute(
     type: 'line',
     source: sourceId,
     layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': color, 'line-width': 3, 'line-opacity': opacity },
+    paint: { 'line-color': color, 'line-width': 6, 'line-opacity': opacity },
   })
 }
 
