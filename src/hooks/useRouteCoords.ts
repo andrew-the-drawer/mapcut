@@ -5,7 +5,7 @@ import type { WaypointEntry } from '../components/WaypointPanel'
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type RoutePair = {
-  rootCoords: number[][]
+  routeCoords: number[][]
   loading: boolean
 }
 
@@ -43,7 +43,7 @@ export function useRouteCoords() {
 
       setRouteData(prev => ({
         ...prev,
-        [fromId]: { ...prev[fromId], [toId]: { rootCoords: [], loading: true } },
+        [fromId]: { ...prev[fromId], [toId]: { routeCoords: [], loading: true } },
       }))
 
       fetchRoute(fromCoords, toCoords, mode, controller.signal)
@@ -52,7 +52,7 @@ export function useRouteCoords() {
           controllersRef.current.delete(key)
           setRouteData(prev => ({
             ...prev,
-            [fromId]: { ...prev[fromId], [toId]: { rootCoords: coords, loading: false } },
+            [fromId]: { ...prev[fromId], [toId]: { routeCoords: coords, loading: false } },
           }))
         })
         .catch(() => {
@@ -60,7 +60,7 @@ export function useRouteCoords() {
           controllersRef.current.delete(key)
           setRouteData(prev => ({
             ...prev,
-            [fromId]: { ...prev[fromId], [toId]: { rootCoords: [], loading: false } },
+            [fromId]: { ...prev[fromId], [toId]: { routeCoords: [], loading: false } },
           }))
         })
     },

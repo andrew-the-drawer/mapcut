@@ -396,7 +396,7 @@ interface AnimSegment {
 const segments: AnimSegment[] = []
 for (let i = 1; i < waypoints.length; i++) {
   const wp = waypoints[i]
-  const coords = routeData[waypoints[i - 1].id]?.[wp.id]?.rootCoords ?? []
+  const coords = routeData[waypoints[i - 1].id]?.[wp.id]?.routeCoords ?? []
   if (coords.length < 2) continue
   const start = coords[0] as [number, number]
   const end = coords[coords.length - 1] as [number, number]

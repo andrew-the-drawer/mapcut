@@ -302,7 +302,7 @@ export default function EditorPage() {
       const wp = waypoints[i]
       const prevWp = waypoints[i - 1]
       const pair = routeData[prevWp.id]?.[wp.id]
-      if (!pair || pair.loading || pair.rootCoords.length < 2) continue
+      if (!pair || pair.loading || pair.routeCoords.length < 2) continue
 
       const color = TRANSPORT_COLORS[wp.transportMode]
 
@@ -314,17 +314,17 @@ export default function EditorPage() {
         }
         arcSegments.push({
           id: wp.id,
-          coords: pair.rootCoords,
+          coords: pair.routeCoords,
           color,
-          visibleCount: pair.rootCoords.length,
+          visibleCount: pair.routeCoords.length,
         })
       } else {
         activeNonFlyIds.add(wp.id)
         if (map.getLayer(`ml-route-${wp.id}`)) {
-          updateMaplibreRoute(map, wp.id, pair.rootCoords)
+          updateMaplibreRoute(map, wp.id, pair.routeCoords)
           setMaplibreRouteOpacity(map, wp.id, 0.9)
         } else {
-          addMaplibreRoute(map, wp.id, pair.rootCoords, color)
+          addMaplibreRoute(map, wp.id, pair.routeCoords, color)
           mapRouteLinesRef.current.add(wp.id)
         }
       }
@@ -386,16 +386,16 @@ export default function EditorPage() {
       const wp = waypoints[i]
       const prevWp = waypoints[i - 1]
       const pair = routeData[prevWp.id]?.[wp.id]
-      if (!pair || pair.rootCoords.length < 2) continue
+      if (!pair || pair.routeCoords.length < 2) continue
 
       const color = TRANSPORT_COLORS[wp.transportMode]
 
       if (wp.transportMode === 'fly') {
         arcSegments.push({
           id: wp.id,
-          coords: pair.rootCoords,
+          coords: pair.routeCoords,
           color,
-          visibleCount: pair.rootCoords.length,
+          visibleCount: pair.routeCoords.length,
         })
       } else {
         if (map.getLayer(`ml-route-${wp.id}`)) {
@@ -403,7 +403,7 @@ export default function EditorPage() {
           map.setPaintProperty(`ml-route-${wp.id}`, 'line-gradient', buildRevealGradient(color, 1))
           setMaplibreRouteOpacity(map, wp.id, 0.9)
         } else {
-          addMaplibreRoute(map, wp.id, pair.rootCoords, color)
+          addMaplibreRoute(map, wp.id, pair.routeCoords, color)
           mapRouteLinesRef.current.add(wp.id)
         }
       }
@@ -425,7 +425,7 @@ export default function EditorPage() {
     const segments: AnimSegment[] = []
     for (let i = 1; i < waypoints.length; i++) {
       const wp = waypoints[i]
-      const coords = routeData[waypoints[i - 1].id]?.[wp.id]?.rootCoords ?? []
+      const coords = routeData[waypoints[i - 1].id]?.[wp.id]?.routeCoords ?? []
       const color = TRANSPORT_COLORS[wp.transportMode]
       if (coords.length >= 2) {
         const startCoord = coords[0] as [number, number]
