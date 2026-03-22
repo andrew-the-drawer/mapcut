@@ -4,7 +4,8 @@
       "WebSearch",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:maplibre.org)",
-      "WebFetch(domain:deck.gl)"
+      "WebFetch(domain:deck.gl)",
+      "WebFetch(domain:mediabunny.dev)"
     ]
   }
 }
