@@ -4,10 +4,12 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import KeyIcon from '../components/icons/KeyIcon'
 import MapOnboarding from '../components/MapOnboarding'
 import WaypointPanel, { type WaypointEntry } from '../components/WaypointPanel'
+import VideoPreviewModal from '../components/VideoPreviewModal'
 import { ELocalStorageKey } from '../utils/constants'
 import { TRANSPORT_COLORS, type TransportMode } from '../lib/map/pathUtils'
 import { useRouteCoords } from '../hooks/useRouteCoords'
 import { ArcCustomLayer, type ArcSegment } from '../lib/map/ArcCustomLayer'
+import { useVideoPreview } from '../hooks/useVideoPreview'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -202,6 +204,16 @@ export default function EditorPage() {
   const [isAnimating, setIsAnimating] = useState(false)
 
   const { routeData, onWaypointAdded, onWaypointDeleted, onTransportModeChanged } = useRouteCoords()
+  const {
+    state: previewState,
+    progress: previewProgress,
+    frameIndex: previewFrameIndex,
+    totalFrames: previewTotalFrames,
+    blobURL: previewBlobURL,
+    startPreview,
+    cancelPreview,
+    closePreview,
+  } = useVideoPreview()
 
   // ── Map init ────────────────────────────────────────────────────────────────
 
@@ -227,7 +239,7 @@ export default function EditorPage() {
       zoom: 2,
       pitch: 45,
       bearing: 0,
-      canvasContextAttributes: {antialias: true}
+      canvasContextAttributes: { antialias: true, preserveDrawingBuffer: true }
     })
 
     mapRef.current = map
@@ -606,6 +618,14 @@ export default function EditorPage() {
     }
   }, [waypoints, routeData, isAnimating, restoreAllRoutes])
 
+  const handlePreview = useCallback(() => {
+    const map = mapRef.current
+    const arcLayer = arcLayerRef.current
+    const container = mapContainerRef.current
+    if (!map || !arcLayer || !container || waypoints.length < 2) return
+    startPreview({ map, arcLayer, container, waypoints, routeData })
+  }, [waypoints, routeData, startPreview])
+
   const stopAnimation = useCallback(() => {
     isPlayingRef.current = false
     if (animFrameRef.current) {
@@ -662,6 +682,7 @@ export default function EditorPage() {
           onTransportModeChange={handleTransportModeChange}
           onPlay={playAnimation}
           onStop={stopAnimation}
+          onPreview={handlePreview}
         />
       )}
 
@@ -678,6 +699,20 @@ export default function EditorPage() {
           <KeyIcon className="w-3.5 h-3.5" />
           BYOK
         </button>
+      )}
+
+      {/* Video preview modal */}
+      {previewState !== 'idle' && (
+        <VideoPreviewModal
+          state={previewState}
+          progress={previewProgress}
+          frameIndex={previewFrameIndex}
+          totalFrames={previewTotalFrames}
+          blobURL={previewBlobURL}
+          onCancel={cancelPreview}
+          onClose={closePreview}
+          onExportFullQuality={closePreview}
+        />
       )}
 
       {/* Onboarding overlay */}

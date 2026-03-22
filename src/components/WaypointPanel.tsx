@@ -27,6 +27,7 @@ interface Props {
   onTransportModeChange: (id: string, mode: TransportMode) => void
   onPlay: () => void
   onStop: () => void
+  onPreview: () => void
 }
 
 // ── Transport mode icons (text-based, no external lib) ───────────────────────
@@ -50,6 +51,7 @@ export default function WaypointPanel({
   onTransportModeChange,
   onPlay,
   onStop,
+  onPreview,
 }: Props) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<GeocoderFeature[]>([])
@@ -230,8 +232,8 @@ export default function WaypointPanel({
         ))}
       </div>
 
-      {/* Play / Stop button */}
-      <div className="px-3 pb-4 pt-2 border-t border-white/10">
+      {/* Play / Stop + Preview buttons */}
+      <div className="px-3 pb-4 pt-2 border-t border-white/10 space-y-2">
         <button
           onClick={isAnimating ? onStop : onPlay}
           disabled={waypoints.length < 2}
@@ -254,6 +256,19 @@ export default function WaypointPanel({
               Play Animation
             </>
           )}
+        </button>
+
+        <button
+          onClick={onPreview}
+          disabled={waypoints.length < 2 || isAnimating}
+          className={`w-full py-2.5 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 ${
+            waypoints.length < 2 || isAnimating
+              ? 'bg-white/5 text-white/25 cursor-not-allowed'
+              : 'bg-purple-500/20 border border-purple-400/40 text-purple-300 hover:bg-purple-500/30'
+          }`}
+        >
+          <span className="text-base leading-none">◉</span>
+          Preview Video
         </button>
       </div>
     </div>
