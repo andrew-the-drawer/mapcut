@@ -89,7 +89,7 @@ However, several areas have room for optimization at the JS layer, GPU layer, an
 
 ## Optimization 1: Throttle Icon Bearing Calculation
 
-**Priority: High | Effort: Low | Impact: ~85% fewer trig calculations per segment**
+**Priority: High | Effort: Low | Impact: Skips bearing recomputation on frames where the tip hasn't advanced**
 
 ### Problem
 
@@ -98,15 +98,18 @@ During fly-mode animation, `updateSegmentProgress` runs on every MapLibre `move`
 2. `arcLayer.projectToScreen()` for the previous point (same)
 3. `Math.atan2()` + degree conversion for SVG rotation
 
-This is ~120 matrix multiplications + trig calls per second just for icon rotation.
+At 60fps the camera can spend several frames between consecutive arc points — the tip screen position and bearing don't change at all in those frames, yet the full two-projection + atan2 pipeline still runs.
 
 ### Solution
 
-Only recompute bearing when the tip has moved a meaningful number of pixels (threshold: 2px). Cache the last screen position and skip rotation updates when delta < threshold.
+Cache `lastTipIdx` and only recompute bearing when `tipIdx` advances to a new arc point. The second `projectToScreen` call (for the previous point) and the `atan2` are skipped on any frame where the tip hasn't moved to a new index.
 
 ```typescript
 // In playAnimation, before the segment loop:
-let lastScreenX = 0, lastScreenY = 0
+let lastTipIdx = -1
+
+// Reset at the start of each segment:
+lastTipIdx = -1
 
 // Inside updateSegmentProgress, fly-mode icon positioning:
 if (el) {
@@ -115,17 +118,20 @@ if (el) {
     el.style.transform = `translate(${screen.x - 20}px, ${screen.y - 20}px)`
     el.style.display = 'flex'
 
-    // Only recompute bearing if tip moved > 2px on screen
-    const dx = screen.x - lastScreenX
-    const dy = screen.y - lastScreenY
-    if (dx * dx + dy * dy > 4) {
-      const svg = el.firstElementChild as HTMLElement | null
-      if (svg) {
-        const screenBearing = Math.atan2(dy, dx) * (180 / Math.PI) + 90
-        svg.style.transform = `rotate(${screenBearing}deg)`
+    // Only recompute bearing when tipIdx advances to a new arc point
+    if (tipIdx !== lastTipIdx && tipIdx > 0) {
+      const prevCoord = allCoords[tipIdx - 1]
+      const prevScreen = arcLayer.projectToScreen(prevCoord[0], prevCoord[1], prevCoord[2] ?? 0)
+      if (prevScreen) {
+        const svg = el.firstElementChild as HTMLElement | null
+        if (svg) {
+          const dx = screen.x - prevScreen.x
+          const dy = screen.y - prevScreen.y
+          const screenBearing = Math.atan2(dy, dx) * (180 / Math.PI) + 90
+          svg.style.transform = `rotate(${screenBearing}deg)`
+        }
       }
-      lastScreenX = screen.x
-      lastScreenY = screen.y
+      lastTipIdx = tipIdx
     }
   } else {
     el.style.display = 'none'
@@ -133,7 +139,9 @@ if (el) {
 }
 ```
 
-**Benefit**: Eliminates the second `projectToScreen` call entirely (uses cached delta instead), and skips rotation CSS updates when the icon barely moved. Reduces per-frame work from 2 projections + atan2 to 1 projection + a distance check.
+**Why not the 2px screen-delta approach**: Caching `lastScreenX/Y = 0` means the first frame computes `dx = screen.x`, `dy = screen.y` — the direction from the canvas corner to the tip, not along the arc. This produces a wrong initial bearing until the tip moves 2px, causing a visible snap. The `tipIdx` approach always derives direction from the actual adjacent arc coordinates.
+
+**Benefit**: Skips the second `projectToScreen` + `atan2` + CSS write on frames where `tipIdx` hasn't changed. Bearing accuracy is identical to the original (uses the same adjacent-point tangent). The number of skipped frames depends on arc density and camera speed — typically ~50–75% of frames are skipped for a 50–100 point arc over a 3–6s flight.
 
 ---
 
@@ -178,9 +186,19 @@ map.addLayer({
 })
 
 // Helper: build a gradient expression that reveals the line up to `progress` (0–1)
-function buildRevealGradient(color: string, progress: number) {
-  // Clamp to avoid degenerate expressions
-  const p = Math.max(0.001, Math.min(progress, 0.999))
+// Boundary cases are handled explicitly to avoid duplicate stops in the interpolate expression:
+// - progress >= 1 → solid color (no transition stops needed)
+// - progress <= 0 → fully transparent
+// - 0 < progress < 1 → p capped at 0.998 so p + 0.001 is always < 1.0
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildRevealGradient(color: string, progress: number): any {
+  if (progress >= 1) {
+    return ['interpolate', ['linear'], ['line-progress'], 0, color, 1, color]
+  }
+  if (progress <= 0) {
+    return ['interpolate', ['linear'], ['line-progress'], 0, 'rgba(0,0,0,0)', 1, 'rgba(0,0,0,0)']
+  }
+  const p = Math.min(progress, 0.998)
   return [
     'interpolate', ['linear'], ['line-progress'],
     0,         color,
@@ -204,6 +222,8 @@ map.setPaintProperty(layerId, 'line-gradient', buildRevealGradient(color, 1))
 4. `restoreAllRoutes()` — set gradient to `progress=1` (fully visible)
 
 **Note**: `line-gradient` and `line-color` are mutually exclusive — when using `line-gradient`, remove `line-color` from the paint spec.
+
+**Note**: Do not pass a naïve `Math.max(0.001, Math.min(progress, 0.999))` clamp to the `interpolate` stops. When `progress = 1`, `p = 0.999` and `p + 0.001 = 1.0` — creating a duplicate stop at `1` which MapLibre rejects silently, causing the layer to not render at all. Always special-case `progress >= 1` and `progress <= 0`.
 
 **Benefit**: Geometry is uploaded once. Per-frame updates are paint-only (expression swap), skipping the expensive GeoJSON serialize → parse → tile → GPU upload pipeline.
 

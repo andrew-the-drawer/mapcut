@@ -64,6 +64,16 @@ function makeTipMarkerEl(mode: TransportMode): HTMLDivElement {
   return el
 }
 
+// Opt 7: pre-computed per-segment data for the animation loop
+interface AnimSegment {
+  wp: WaypointEntry
+  coords: number[][]
+  color: string
+  startCoord: [number, number]
+  endCoord: [number, number]
+  totalDist: number  // haversine km, computed once
+}
+
 // Haversine distance in km between two [lng, lat] points.
 function haversine(a: [number, number], b: [number, number]): number {
   const toRad = (d: number) => (d * Math.PI) / 180
@@ -92,6 +102,7 @@ function addMaplibreRoute(
   if (map.getSource(sourceId)) map.removeSource(sourceId)
   map.addSource(sourceId, {
     type: 'geojson',
+    lineMetrics: true,  // Opt 2: required for line-gradient / line-progress
     data: { type: 'Feature', geometry: { type: 'LineString', coordinates: coords }, properties: {} },
   })
   map.addLayer({
@@ -99,7 +110,8 @@ function addMaplibreRoute(
     type: 'line',
     source: sourceId,
     layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': color, 'line-width': 6, 'line-opacity': opacity },
+    // Opt 2: line-gradient replaces line-color (mutually exclusive); gradient at full reveal
+    paint: { 'line-gradient': buildRevealGradient(color, 1), 'line-width': 6, 'line-opacity': opacity },
   })
 }
 
@@ -121,6 +133,30 @@ function removeMaplibreRoute(map: maplibregl.Map, id: string) {
   const { sourceId, layerId } = mlIds(id)
   if (map.getLayer(layerId)) map.removeLayer(layerId)
   if (map.getSource(sourceId)) map.removeSource(sourceId)
+}
+
+/**
+ * Opt 2: build a line-gradient expression that reveals the line up to `progress` (0–1).
+ * Transparent beyond the progress point — no geometry re-upload needed.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildRevealGradient(color: string, progress: number): any {
+  // Special-case the boundaries to avoid duplicate stops in the interpolate expression
+  if (progress >= 1) {
+    return ['interpolate', ['linear'], ['line-progress'], 0, color, 1, color]
+  }
+  if (progress <= 0) {
+    return ['interpolate', ['linear'], ['line-progress'], 0, 'rgba(0,0,0,0)', 1, 'rgba(0,0,0,0)']
+  }
+  // p is capped at 0.998 so p + 0.001 < 1.0 — no duplicate stop
+  const p = Math.min(progress, 0.998)
+  return [
+    'interpolate', ['linear'], ['line-progress'],
+    0,         color,
+    p,         color,
+    p + 0.001, 'rgba(0,0,0,0)',
+    1,         'rgba(0,0,0,0)',
+  ]
 }
 
 function makeWaypointMarkerEl(): HTMLDivElement {
@@ -363,7 +399,8 @@ export default function EditorPage() {
         })
       } else {
         if (map.getLayer(`ml-route-${wp.id}`)) {
-          updateMaplibreRoute(map, wp.id, pair.rootCoords)
+          // Opt 2: paint-only restore — no geometry re-upload
+          map.setPaintProperty(`ml-route-${wp.id}`, 'line-gradient', buildRevealGradient(color, 1))
           setMaplibreRouteOpacity(map, wp.id, 0.9)
         } else {
           addMaplibreRoute(map, wp.id, pair.rootCoords, color)
@@ -382,8 +419,26 @@ export default function EditorPage() {
 
     setIsAnimating(true)
     isPlayingRef.current = true
+    arcLayer.setAnimating(true)  // Opt 4: enable continuous repaint loop
 
-    // Helper: remove any active tip marker/element
+    // Opt 7: pre-compute all segment data before the animation loop
+    const segments: AnimSegment[] = []
+    for (let i = 1; i < waypoints.length; i++) {
+      const wp = waypoints[i]
+      const coords = routeData[waypoints[i - 1].id]?.[wp.id]?.rootCoords ?? []
+      const color = TRANSPORT_COLORS[wp.transportMode]
+      if (coords.length >= 2) {
+        const startCoord = coords[0] as [number, number]
+        const endCoord = coords[coords.length - 1] as [number, number]
+        segments.push({ wp, coords, color, startCoord, endCoord, totalDist: haversine(startCoord, endCoord) })
+      } else {
+        segments.push({ wp, coords, color, startCoord: [0, 0], endCoord: [0, 0], totalDist: 0 })
+      }
+    }
+
+    // Opt 1: only recompute bearing when tipIdx advances to a new arc point
+    let lastTipIdx = -1
+
     const removeTip = () => {
       tipMarkerRef.current?.remove()
       tipMarkerRef.current = null
@@ -393,65 +448,55 @@ export default function EditorPage() {
       }
     }
 
-    // Helper: update route reveal & tip marker for a given progress (0–1)
-    const updateSegmentProgress = (
-      wp: WaypointEntry,
-      allCoords: number[][],
-      color: string,
-      progress: number,
-    ) => {
+    const updateSegmentProgress = (seg: AnimSegment, progress: number) => {
+      const { wp, coords: allCoords, color } = seg
       const clampedProgress = Math.max(0, Math.min(progress, 1))
       const sliceEnd = Math.max(2, Math.ceil(clampedProgress * allCoords.length))
 
       if (wp.transportMode === 'fly') {
         arcLayer.updateAnimation(wp.id, sliceEnd)
       } else {
-        const revealedCoords = allCoords.slice(0, sliceEnd)
-        if (map.getSource(`ml-route-${wp.id}`)) {
-          updateMaplibreRoute(map, wp.id, revealedCoords)
-          setMaplibreRouteOpacity(map, wp.id, 0.9)
-        } else {
-          addMaplibreRoute(map, wp.id, revealedCoords, color, 0.9)
-          mapRouteLinesRef.current.add(wp.id)
+        // Opt 2: paint-only gradient update — no geometry re-upload
+        const { layerId } = mlIds(wp.id)
+        if (map.getLayer(layerId)) {
+          map.setPaintProperty(layerId, 'line-gradient', buildRevealGradient(color, clampedProgress))
         }
       }
 
-      // Move tip marker along route
       const tipIdx = Math.min(Math.floor(clampedProgress * (allCoords.length - 1)), allCoords.length - 1)
       const tipCoord = allCoords[tipIdx]
 
       if (wp.transportMode === 'fly') {
-        // Position fly-mode tip via 3D projection onto the arc
         const el = flyTipElRef.current
         if (el) {
           const screen = arcLayer.projectToScreen(tipCoord[0], tipCoord[1], tipCoord[2] ?? 0)
           if (screen) {
             el.style.transform = `translate(${screen.x - 20}px, ${screen.y - 20}px)`
             el.style.display = 'flex'
-            // Compute bearing in screen space so it stays aligned under any camera zoom/pitch
-            const svg = el.firstElementChild as HTMLElement | null
-            if (svg && tipIdx > 0) {
+            // Opt 1: only recompute bearing when tipIdx advances — skips redundant frames
+            if (tipIdx !== lastTipIdx && tipIdx > 0) {
               const prevCoord = allCoords[tipIdx - 1]
               const prevScreen = arcLayer.projectToScreen(prevCoord[0], prevCoord[1], prevCoord[2] ?? 0)
               if (prevScreen) {
-                const dx = screen.x - prevScreen.x
-                const dy = screen.y - prevScreen.y
-                // SVG plane points up (north); screen atan2 + 90° maps to CSS clockwise rotation
-                const screenBearing = Math.atan2(dy, dx) * (180 / Math.PI) + 90
-                svg.style.transform = `rotate(${screenBearing}deg)`
+                const svg = el.firstElementChild as HTMLElement | null
+                if (svg) {
+                  const dx = screen.x - prevScreen.x
+                  const dy = screen.y - prevScreen.y
+                  const screenBearing = Math.atan2(dy, dx) * (180 / Math.PI) + 90
+                  svg.style.transform = `rotate(${screenBearing}deg)`
+                }
               }
+              lastTipIdx = tipIdx
             }
           } else {
             el.style.display = 'none'
           }
         }
       } else {
-        // Non-fly: use MapLibre Marker (ground-level), no rotation needed
         tipMarkerRef.current?.setLngLat(tipCoord as [number, number])
       }
     }
 
-    // Fly camera and wait, resolving on moveend
     const flyAndWait = (coords: [number, number], duration: number) =>
       new Promise<void>(resolve => {
         map.flyTo({ center: coords, zoom: 7, duration, curve: 1.42 })
@@ -459,37 +504,30 @@ export default function EditorPage() {
       })
 
     try {
-      // Hide all fly-mode arcs
       arcLayer.setSegments([])
 
-      // Fade out non-fly MapLibre routes
       for (const id of mapRouteLinesRef.current) {
         setMaplibreRouteOpacity(map, id, 0)
       }
 
-      // Fly to the first waypoint
       await flyAndWait(waypoints[0].coordinates, 2000)
       if (!isPlayingRef.current) return
 
-      // Accumulates fully-revealed arc segments for completed fly legs
       const completedSegments: ArcSegment[] = []
 
-      // Animate each segment
-      for (let i = 1; i < waypoints.length; i++) {
+      for (const seg of segments) {  // Opt 7: iterate pre-built plan
         if (!isPlayingRef.current) break
 
-        const wp = waypoints[i]
-        const allCoords = routeData[waypoints[i - 1].id]?.[wp.id]?.rootCoords ?? []
-        const color = TRANSPORT_COLORS[wp.transportMode]
-        const startCoord = allCoords[0] as [number, number]
-        const endCoord = allCoords[allCoords.length - 1] as [number, number]
-        const totalDist = haversine(startCoord, endCoord)
+        const { wp, coords: allCoords, color, totalDist } = seg
+        // Opt 8: scale duration by geodesic distance — short hops feel snappier
+        const duration = Math.min(2500 + totalDist * 0.5, 6000)
 
-        // Create tip marker for this segment
+        // Reset bearing cache for this segment (Opt 1)
+        lastTipIdx = -1
+
         removeTip()
         if (allCoords.length >= 2) {
           if (wp.transportMode === 'fly') {
-            // Fly mode: raw DOM element positioned via 3D projection
             const el = makeTipMarkerEl(wp.transportMode)
             el.style.position = 'absolute'
             el.style.left = '0'
@@ -499,71 +537,69 @@ export default function EditorPage() {
             mapContainerRef.current!.appendChild(el)
             flyTipElRef.current = el
           } else {
-            // Non-fly: MapLibre Marker on ground
             tipMarkerRef.current = new maplibregl.Marker({
               element: makeTipMarkerEl(wp.transportMode),
               anchor: 'center',
             })
-              .setLngLat(startCoord)
+              .setLngLat(seg.startCoord)
               .addTo(map)
           }
         }
 
-        const DURATION = 3500
-
         if (allCoords.length >= 2) {
           if (wp.transportMode === 'fly') {
-            // Register the segment with minimal visible points so Three.js knows about it
             arcLayer.setSegments([
               ...completedSegments,
               { id: wp.id, coords: allCoords, color, visibleCount: 2 },
             ])
+          } else {
+            // Opt 2: upload full geometry once; reveal via gradient paint property
+            const { layerId, sourceId } = mlIds(wp.id)
+            if (!map.getSource(sourceId)) {
+              addMaplibreRoute(map, wp.id, allCoords, color, 0.9)
+              mapRouteLinesRef.current.add(wp.id)
+            } else if (map.getLayer(layerId)) {
+              map.setPaintProperty(layerId, 'line-opacity', 0.9)
+            }
+            map.setPaintProperty(layerId, 'line-gradient', buildRevealGradient(color, 0))
           }
 
-          // Drive route animation from camera movement (syncs with flyTo easing)
           const onMove = () => {
             if (!isPlayingRef.current) return
             const center = map.getCenter()
-            const distFromStart = haversine(startCoord, [center.lng, center.lat])
+            const distFromStart = haversine(seg.startCoord, [center.lng, center.lat])
             const progress = totalDist > 0 ? Math.min(distFromStart / totalDist, 1) : 1
-            updateSegmentProgress(wp, allCoords, color, progress)
+            updateSegmentProgress(seg, progress)
           }
 
           map.on('move', onMove)
 
-          // Start flyTo — the move handler drives the route reveal
           await new Promise<void>(resolve => {
-            map.flyTo({ center: wp.coordinates, zoom: 7, duration: DURATION, curve: 1.42 })
+            map.flyTo({ center: wp.coordinates, zoom: 7, duration, curve: 1.42 })
             map.once('moveend', () => {
               map.off('move', onMove)
-              // Ensure fully revealed
-              updateSegmentProgress(wp, allCoords, color, 1)
+              updateSegmentProgress(seg, 1)
               resolve()
             })
           })
         } else {
-          await flyAndWait(wp.coordinates, DURATION)
+          await flyAndWait(wp.coordinates, duration)
         }
 
         removeTip()
 
-        // Push fully-revealed fly segment into completed set
         if (allCoords.length >= 2 && wp.transportMode === 'fly') {
-          completedSegments.push({
-            id: wp.id,
-            coords: allCoords,
-            color,
-            visibleCount: allCoords.length,
-          })
+          completedSegments.push({ id: wp.id, coords: allCoords, color, visibleCount: allCoords.length })
           arcLayer.setSegments(completedSegments)
         }
 
-        if (i < waypoints.length - 1 && isPlayingRef.current) {
+        if (seg !== segments[segments.length - 1] && isPlayingRef.current) {
           await sleep(600)
         }
       }
     } finally {
       removeTip()
+      arcLayer.setAnimating(false)  // Opt 4: stop continuous repaint
       restoreAllRoutes()
       isPlayingRef.current = false
       setIsAnimating(false)

@@ -38,6 +38,8 @@ export class ArcCustomLayer implements maplibregl.CustomLayerInterface {
   private map?: maplibregl.Map
   private _resizeHandler?: () => void
   private _mvpMatrix = new THREE.Matrix4()
+  private _projVec = new THREE.Vector4()   // Opt 3: reuse to avoid per-call allocation
+  private _animating = false               // Opt 4: idle-repaint guard
 
   onAdd(map: maplibregl.Map, gl: WebGLRenderingContext | WebGL2RenderingContext): void {
     this.map = map
@@ -84,7 +86,13 @@ export class ArcCustomLayer implements maplibregl.CustomLayerInterface {
     this.renderer.resetState()
     this.renderer.render(this.scene, this.camera)
 
-    this.map?.triggerRepaint();
+    if (this._animating) this.map?.triggerRepaint()  // Opt 4: skip idle repaints
+  }
+
+  /** Opt 4: call setAnimating(true) at animation start, false at end */
+  setAnimating(value: boolean): void {
+    this._animating = value
+    if (value) this.map?.triggerRepaint()
   }
 
   /**
@@ -93,7 +101,7 @@ export class ArcCustomLayer implements maplibregl.CustomLayerInterface {
    */
   projectToScreen(lng: number, lat: number, altMeters: number): { x: number; y: number } | null {
     const [gx, gy, gz] = lngLatAltToGlobe(lng, lat, altMeters)
-    const vec = new THREE.Vector4(gx, gy, gz, 1).applyMatrix4(this._mvpMatrix)
+    const vec = this._projVec.set(gx, gy, gz, 1).applyMatrix4(this._mvpMatrix)  // Opt 3: reuse
     if (vec.w <= 0) return null // behind camera
     const ndcX = vec.x / vec.w
     const ndcY = vec.y / vec.w

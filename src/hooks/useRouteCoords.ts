@@ -132,5 +132,12 @@ export function useRouteCoords() {
     [fetchAndStore],
   )
 
-  return { routeData, onWaypointAdded, onWaypointDeleted, onTransportModeChanged }
+  /** Opt 6: fire all route fetches in parallel (e.g. on project import) */
+  const fetchAllRoutes = useCallback((wps: WaypointEntry[]) => {
+    for (let i = 1; i < wps.length; i++) {
+      fetchAndStore(wps[i - 1].id, wps[i - 1].coordinates, wps[i].id, wps[i].coordinates, wps[i].transportMode)
+    }
+  }, [fetchAndStore])
+
+  return { routeData, onWaypointAdded, onWaypointDeleted, onTransportModeChanged, fetchAllRoutes }
 }
