@@ -7,6 +7,8 @@ import WaypointPanel, { type WaypointEntry } from '../components/WaypointPanel'
 import VideoPreviewModal from '../components/VideoPreviewModal'
 import { ELocalStorageKey } from '../utils/constants'
 import { TRANSPORT_COLORS, type TransportMode } from '../lib/map/pathUtils'
+import { buildRevealGradient } from '../lib/map/mapUtils'
+import { INITIAL_CENTER, INITIAL_ZOOM, TARGET_ZOOM, MAP_PITCH, OUTRO_FLY_MS, OUTRO_ZOOM } from '../lib/animation/AnimationSequencer'
 import { useRouteCoords } from '../hooks/useRouteCoords'
 import { ArcCustomLayer, type ArcSegment } from '../lib/map/ArcCustomLayer'
 import { useVideoPreview } from '../hooks/useVideoPreview'
@@ -135,30 +137,6 @@ function removeMaplibreRoute(map: maplibregl.Map, id: string) {
   const { sourceId, layerId } = mlIds(id)
   if (map.getLayer(layerId)) map.removeLayer(layerId)
   if (map.getSource(sourceId)) map.removeSource(sourceId)
-}
-
-/**
- * Opt 2: build a line-gradient expression that reveals the line up to `progress` (0–1).
- * Transparent beyond the progress point — no geometry re-upload needed.
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function buildRevealGradient(color: string, progress: number): any {
-  // Special-case the boundaries to avoid duplicate stops in the interpolate expression
-  if (progress >= 1) {
-    return ['interpolate', ['linear'], ['line-progress'], 0, color, 1, color]
-  }
-  if (progress <= 0) {
-    return ['interpolate', ['linear'], ['line-progress'], 0, 'rgba(0,0,0,0)', 1, 'rgba(0,0,0,0)']
-  }
-  // p is capped at 0.998 so p + 0.001 < 1.0 — no duplicate stop
-  const p = Math.min(progress, 0.998)
-  return [
-    'interpolate', ['linear'], ['line-progress'],
-    0,         color,
-    p,         color,
-    p + 0.001, 'rgba(0,0,0,0)',
-    1,         'rgba(0,0,0,0)',
-  ]
 }
 
 function makeWaypointMarkerEl(): HTMLDivElement {
@@ -511,7 +489,7 @@ export default function EditorPage() {
 
     const flyAndWait = (coords: [number, number], duration: number) =>
       new Promise<void>(resolve => {
-        map.flyTo({ center: coords, zoom: 7, duration, curve: 1.42 })
+        map.flyTo({ center: coords, zoom: TARGET_ZOOM, duration, curve: 1.42 })
         map.once('moveend', () => resolve())
       })
 
@@ -521,6 +499,11 @@ export default function EditorPage() {
       for (const id of mapRouteLinesRef.current) {
         setMaplibreRouteOpacity(map, id, 0)
       }
+
+      // Intro: jump to global view, then fly in to first waypoint
+      map.jumpTo({ center: INITIAL_CENTER, zoom: INITIAL_ZOOM, pitch: MAP_PITCH, bearing: 0 })
+      await new Promise(resolve => requestAnimationFrame(resolve))
+      if (!isPlayingRef.current) return
 
       await flyAndWait(waypoints[0].coordinates, 2000)
       if (!isPlayingRef.current) return
@@ -587,7 +570,7 @@ export default function EditorPage() {
           map.on('move', onMove)
 
           await new Promise<void>(resolve => {
-            map.flyTo({ center: wp.coordinates, zoom: 7, duration, curve: 1.42 })
+            map.flyTo({ center: wp.coordinates, zoom: TARGET_ZOOM, duration, curve: 1.42 })
             map.once('moveend', () => {
               map.off('move', onMove)
               updateSegmentProgress(seg, 1)
@@ -608,6 +591,23 @@ export default function EditorPage() {
         if (seg !== segments[segments.length - 1] && isPlayingRef.current) {
           await sleep(600)
         }
+      }
+
+      // Outro: zoom out to show full earth with all routes visible
+      removeTip()
+      if (isPlayingRef.current) {
+        restoreAllRoutes()
+        await new Promise<void>(resolve => {
+          map.flyTo({
+            center: INITIAL_CENTER,
+            zoom: OUTRO_ZOOM,
+            pitch: 0,
+            bearing: 0,
+            duration: OUTRO_FLY_MS,
+            curve: 1.2,
+          })
+          map.once('moveend', () => resolve())
+        })
       }
     } finally {
       removeTip()

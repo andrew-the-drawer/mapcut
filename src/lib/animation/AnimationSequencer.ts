@@ -21,6 +21,7 @@ export interface AnimationFrame {
     coord: number[]        // [lng, lat, altMeters?]
     bearing: number        // degrees
   }
+  isOutro?: boolean
 }
 
 interface SegmentInfo {
@@ -92,12 +93,14 @@ function easeInOut(t: number): number {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const PAUSE_MS = 600
-const INITIAL_FLY_MS = 2000
-const INITIAL_CENTER: [number, number] = [15, 25]
-const INITIAL_ZOOM = 2
-const TARGET_ZOOM = 7
-const MAP_PITCH = 45
+export const PAUSE_MS = 600
+export const INITIAL_FLY_MS = 2000
+export const INITIAL_CENTER: [number, number] = [15, 25]
+export const INITIAL_ZOOM = 2
+export const TARGET_ZOOM = 7
+export const MAP_PITCH = 45
+export const OUTRO_FLY_MS = 2500
+export const OUTRO_ZOOM = 2
 
 // ── AnimationSequencer ────────────────────────────────────────────────────────
 
@@ -155,11 +158,12 @@ export class AnimationSequencer {
 
   private _computeTotalFrames(): number {
     const initialFrames = Math.round((INITIAL_FLY_MS / 1000) * this.fps)
+    const outroFrames = Math.round((OUTRO_FLY_MS / 1000) * this.fps)
     const segmentFrames = this.segmentInfos.reduce(
       (sum, s) => sum + s.transitionFrames + s.pauseFrames,
       0,
     )
-    return initialFrames + segmentFrames
+    return initialFrames + segmentFrames + outroFrames
   }
 
   *frames(): Generator<AnimationFrame> {
@@ -242,6 +246,24 @@ export class AnimationSequencer {
           bearing: 0,
           segments: makeSegments(),
         }
+      }
+    }
+
+    // Phase 3: outro — zoom out to full-earth view with all routes fully visible
+    const lastWp = this.waypoints[this.waypoints.length - 1].coordinates
+    const outroFrames = Math.round((OUTRO_FLY_MS / 1000) * this.fps)
+    segmentProgress.fill(1)
+
+    for (let f = 0; f < outroFrames; f++) {
+      const t = outroFrames > 1 ? f / (outroFrames - 1) : 1
+      const easedT = easeInOut(t)
+      yield {
+        center: geodesicInterpolate(lastWp, INITIAL_CENTER, easedT),
+        zoom: lerp(TARGET_ZOOM, OUTRO_ZOOM, easedT),
+        pitch: lerp(MAP_PITCH, 0, easedT),
+        bearing: 0,
+        segments: makeSegments(),
+        isOutro: true,
       }
     }
   }

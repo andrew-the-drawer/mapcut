@@ -2,26 +2,9 @@ import maplibregl from 'maplibre-gl'
 import type { ArcCustomLayer, ArcSegment } from '../map/ArcCustomLayer'
 import type { AnimationSequencer, AnimationFrame } from '../animation/AnimationSequencer'
 import { VideoMuxer } from './VideoMuxer'
+import { buildRevealGradient } from '../map/mapUtils'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function buildRevealGradient(color: string, progress: number): any {
-  if (progress >= 1) {
-    return ['interpolate', ['linear'], ['line-progress'], 0, color, 1, color]
-  }
-  if (progress <= 0) {
-    return ['interpolate', ['linear'], ['line-progress'], 0, 'rgba(0,0,0,0)', 1, 'rgba(0,0,0,0)']
-  }
-  const p = Math.min(progress, 0.998)
-  return [
-    'interpolate', ['linear'], ['line-progress'],
-    0,         color,
-    p,         color,
-    p + 0.001, 'rgba(0,0,0,0)',
-    1,         'rgba(0,0,0,0)',
-  ]
-}
 
 /**
  * Wait for the map to finish rendering the current frame.
@@ -129,6 +112,7 @@ export class PreviewRenderer {
 
     // Clear arc layer before starting
     arcLayer.setSegments([])
+    arcLayer.setTipMarker(null, '')
 
     try {
       for (const frame of sequencer.frames()) {
@@ -172,6 +156,14 @@ export class PreviewRenderer {
               )
             }
           }
+        }
+
+        // 2b. Update tip marker (THREE.js sphere on arc, captured in VideoFrame)
+        if (frame.activeTip && !frame.isOutro) {
+          const tipSeg = frame.segments.find(s => s.id === frame.activeTip!.segmentId)
+          arcLayer.setTipMarker(frame.activeTip.coord, tipSeg?.color ?? '#ffffff')
+        } else {
+          arcLayer.setTipMarker(null, '')
         }
 
         // 3. Wait for map to finish rendering (tiles loaded, GPU idle)
@@ -223,6 +215,8 @@ export class PreviewRenderer {
           }
         }
       }
+
+      arcLayer.setTipMarker(null, '')
 
       // Restore container size
       container.style.width = origWidth

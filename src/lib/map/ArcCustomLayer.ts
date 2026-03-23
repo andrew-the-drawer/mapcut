@@ -40,6 +40,8 @@ export class ArcCustomLayer implements maplibregl.CustomLayerInterface {
   private _mvpMatrix = new THREE.Matrix4()
   private _projVec = new THREE.Vector4()   // Opt 3: reuse to avoid per-call allocation
   private _animating = false               // Opt 4: idle-repaint guard
+  private _tipMesh: THREE.Mesh | null = null
+  private _tipWorldPos: THREE.Vector3 | null = null  // world-space position for screen-size scaling
 
   onAdd(map: maplibregl.Map, gl: WebGLRenderingContext | WebGL2RenderingContext): void {
     this.map = map
@@ -76,12 +78,32 @@ export class ArcCustomLayer implements maplibregl.CustomLayerInterface {
       this.scene.remove(line)
     })
     this.segments.clear()
+    if (this._tipMesh) {
+      this._tipMesh.geometry.dispose()
+      ;(this._tipMesh.material as THREE.MeshBasicMaterial).dispose()
+      this.scene.remove(this._tipMesh)
+      this._tipMesh = null
+    }
     this.renderer.dispose()
   }
 
   render(gl: WebGLRenderingContext | WebGL2RenderingContext, args: maplibregl.CustomRenderMethodInput): void {
     this._mvpMatrix.fromArray(args.modelViewProjectionMatrix)
     this.camera.projectionMatrix.copy(this._mvpMatrix)
+
+    // Scale tip sphere each frame so it appears as a fixed 40px diameter on screen,
+    // matching the CSS marker used in the live editor.
+    if (this._tipMesh && this._tipWorldPos) {
+      const TARGET_SCREEN_RADIUS = 20 // px — half of the 40px CSS marker
+      const canvas = this.map!.getCanvas()
+      const vec = this._projVec.set(
+        this._tipWorldPos.x, this._tipWorldPos.y, this._tipWorldPos.z, 1,
+      ).applyMatrix4(this._mvpMatrix)
+      if (vec.w > 0) {
+        const scale = (TARGET_SCREEN_RADIUS * vec.w) / (canvas.clientHeight / 2)
+        this._tipMesh.scale.setScalar(scale)
+      }
+    }
 
     this.renderer.resetState()
     this.renderer.render(this.scene, this.camera)
@@ -110,6 +132,35 @@ export class ArcCustomLayer implements maplibregl.CustomLayerInterface {
       x: ((ndcX + 1) / 2) * canvas.clientWidth,
       y: ((1 - ndcY) / 2) * canvas.clientHeight,
     }
+  }
+
+  /**
+   * Place (or remove) a 3D sphere marker at the arc tip position, including altitude.
+   * Pass null to hide the marker. Used by PreviewRenderer to keep the tip on the arc.
+   */
+  setTipMarker(coord: number[] | null, color: string): void {
+    if (!coord) {
+      if (this._tipMesh) {
+        this.scene.remove(this._tipMesh)
+        this._tipMesh.geometry.dispose()
+        ;(this._tipMesh.material as THREE.MeshBasicMaterial).dispose()
+        this._tipMesh = null
+      }
+      this._tipWorldPos = null
+      return
+    }
+    const [gx, gy, gz] = lngLatAltToGlobe(coord[0], coord[1], coord[2] ?? 0)
+    if (!this._tipMesh) {
+      // Radius 1.0 — actual screen size is controlled dynamically in render()
+      const geo = new THREE.SphereGeometry(1.0, 16, 16)
+      const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(color), depthTest: false })
+      this._tipMesh = new THREE.Mesh(geo, mat)
+      this.scene.add(this._tipMesh)
+    }
+    ;(this._tipMesh.material as THREE.MeshBasicMaterial).color.set(color)
+    this._tipMesh.position.set(gx, gy, gz)
+    if (!this._tipWorldPos) this._tipWorldPos = new THREE.Vector3()
+    this._tipWorldPos.set(gx, gy, gz)
   }
 
   setSegments(desired: ArcSegment[]): void {

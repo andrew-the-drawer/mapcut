@@ -31,7 +31,7 @@ export interface UseVideoPreviewReturn {
 
 // ── useVideoPreview ───────────────────────────────────────────────────────────
 
-const PREVIEW_FPS = 24
+const PREVIEW_FPS = 24;
 
 export function useVideoPreview(): UseVideoPreviewReturn {
   const [state, setState] = useState<PreviewState>('idle')
